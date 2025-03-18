@@ -26,7 +26,7 @@ exports.save_to_redis = function(next, connection) {
   const mailbox_size = ((plugin.cfg.main || {}).mailbox_size || 10) - 1;
   const mailbox_ttl = ((plugin.cfg.main || {}).mailbox_ttl || 3600);
 
-  // plugin.loginfo("Maildrop.cc plugin");
+  // plugin.loginfo("saleis.live plugin");
   plugin.logdebug(JSON.stringify(recipients));
 
   if (!!redis) {

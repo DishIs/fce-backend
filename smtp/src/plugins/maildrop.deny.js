@@ -15,7 +15,7 @@ exports.rcpt = function(next, connection, params) {
   const recipient_host = params["original_host"]; // Get the recipient address
 
   // Allow emails to kodewith.me domain
-  if (recipient_host && recipient_host == 'kodewith.me') {
+  if (recipient_host && recipient_host == 'saleis.live') {
     return next(); // Allow this recipient
   }
 
