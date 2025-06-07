@@ -8,8 +8,8 @@ import { subscriber } from './redis';  // Import Redis subscriber
 
 const app = express();
 const server = createServer({
-  key: fs.readFileSync('/etc/letsencrypt/live/saleis.live/privkey.pem'),
-  cert: fs.readFileSync('/etc/letsencrypt/live/saleis.live/fullchain.pem'),
+  key: fs.readFileSync('/home/ubuntu/ssl/privkey.pem'),
+  cert: fs.readFileSync('/home/ubuntu/ssl/fullchain.pem'),
 }, app);
 const wss = new WebSocket.Server({ server });
 
