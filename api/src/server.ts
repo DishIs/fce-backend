@@ -3,10 +3,11 @@ import { createServer } from 'http';
 import WebSocket from 'ws';
 import { listHandler, messageHandler, deleteHandler } from './mailbox';
 import { statsHandler } from './statistics';
+import { subscriber } from './redis';  // Import Redis subscriber
 
 const app = express();
 const server = createServer(app);
-const wss = new WebSocket.Server({ server }); // Attach WS to HTTP server
+const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
 
@@ -17,32 +18,27 @@ app.get('/mailbox/:name/message/:id', messageHandler);
 app.delete('/mailbox/:name/message/:id', deleteHandler);
 app.get('/health', statsHandler);
 
-// Store WS clients by mailbox name
 const mailboxClients: Record<string, Set<WebSocket>> = {};
 
-interface MailboxClients {
-  [mailbox: string]: Set<WebSocket>;
-}
-
-interface MailboxConnectionRequest extends Request {
-  url: string;
-}
-
-wss.on('connection', (ws: WebSocket, req: MailboxConnectionRequest) => {
-  const mailbox: string | null = new URLSearchParams(req.url?.split('?')[1]).get('mailbox');
+wss.on('connection', (ws: WebSocket, req) => {
+  const mailbox = new URLSearchParams(req.url?.split('?')[1]).get('mailbox');
   if (!mailbox) {
     ws.close();
     return;
   }
 
-  if (!mailboxClients[mailbox]) mailboxClients[mailbox] = new Set<WebSocket>();
+  if (!mailboxClients[mailbox]) mailboxClients[mailbox] = new Set();
   mailboxClients[mailbox].add(ws);
 
-  ws.on('close', () => mailboxClients[mailbox].delete(ws));
+  ws.on('close', () => {
+    mailboxClients[mailbox].delete(ws);
+    if (mailboxClients[mailbox].size === 0) {
+      delete mailboxClients[mailbox];
+    }
+  });
 });
 
-// Export a method to notify mailbox clients
-export function notifyMailbox(mailbox: string, event: any) {
+function notifyMailbox(mailbox: string, event: any) {
   const clients = mailboxClients[mailbox];
   if (clients) {
     for (const ws of clients) {
@@ -53,7 +49,19 @@ export function notifyMailbox(mailbox: string, event: any) {
   }
 }
 
-// Start server
+// Subscribe to all mailbox event channels (pattern subscribe)
+(async () => {
+  await subscriber.pSubscribe('mailbox:events:*', (message, channel) => {
+    try {
+      const event = JSON.parse(message);
+      const mailbox = channel.split(':')[2]; // Extract mailbox from channel name
+      notifyMailbox(mailbox, event);
+    } catch (e) {
+      console.error('Failed to parse Redis pubsub message', e);
+    }
+  });
+})();
+
 server.listen(PORT, () => {
   console.log(`Server + WS running on http://localhost:${PORT}`);
 });
