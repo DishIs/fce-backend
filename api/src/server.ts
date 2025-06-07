@@ -1,12 +1,16 @@
 import express from 'express';
-import { createServer } from 'http';
+import { createServer } from 'https';
+import fs from 'fs';
 import WebSocket from 'ws';
 import { listHandler, messageHandler, deleteHandler } from './mailbox';
 import { statsHandler } from './statistics';
 import { subscriber } from './redis';  // Import Redis subscriber
 
 const app = express();
-const server = createServer(app);
+const server = createServer({
+  key: fs.readFileSync('/etc/letsencrypt/live/saleis.live/privkey.pem'),
+  cert: fs.readFileSync('/etc/letsencrypt/live/saleis.live/fullchain.pem'),
+}, app);
 const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3000;
