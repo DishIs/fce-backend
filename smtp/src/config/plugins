@@ -46,7 +46,6 @@ tls
 # Only accept mail where the MAIL FROM domain is resolvable to an MX record
 mail_from.is_resolvable
 spf
-dns-list
 greylist
 
 # tarpit

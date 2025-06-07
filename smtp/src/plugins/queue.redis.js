@@ -2,20 +2,20 @@ const shortid = require('shortid');
 const format = require('date-fns').format;
 const simpleParser = require('mailparser').simpleParser;
 
-exports.register = function() {
+exports.register = function () {
   const plugin = this;
   plugin.load_ini();
   plugin.register_hook('queue', 'save_to_redis');
 };
 
-exports.load_ini = function() {
+exports.load_ini = function () {
   const plugin = this;
   plugin.cfg = plugin.config.get('queue.redis.ini', () => {
     plugin.load_ini();
   });
 };
 
-exports.save_to_redis = function(next, connection) {
+exports.save_to_redis = function (next, connection) {
   const plugin = this;
   const redis = connection.server.notes.redis;
   const stream = connection.transaction.message_stream;
@@ -55,15 +55,28 @@ exports.save_to_redis = function(next, connection) {
           } else {
             html = parsed.textAsHtml;
           }
-          const messageBody = Object.assign({}, message, {body: body, html: html});
+          const messageBody = Object.assign({}, message, { body: body, html: html });
           plugin.logwarn("Saving message from " + connection.transaction.mail_from.original + " to " + destination);
+
+          // Save to Redis lists
           redis.lPush(key, JSON.stringify(message));
           redis.lPush(key + ":body", JSON.stringify(messageBody));
           redis.lTrim(key, 0, mailbox_size);
           redis.lTrim(key + ":body", 0, mailbox_size);
           redis.expire(key, mailbox_ttl);
           redis.expire(key + ":body", mailbox_ttl);
+
+          // *** Publish event for new mail ***
+          redis.publish(`mailbox:events:${destination}`, JSON.stringify({
+            type: 'new_mail',
+            mailbox: destination,
+            messageId: message.id,
+            subject: message.subject,
+            from: message.from,
+            date: message.date,
+          }));
         });
+
         next(OK);
       });
     });
