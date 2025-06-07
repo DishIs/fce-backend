@@ -1,4 +1,4 @@
-import client from "./redis";
+import {client} from "./redis";
 import bigInt from "big-integer";
 import ratelimit from "./ratelimit";
 import { ParsedMail, simpleParser } from "mailparser";
