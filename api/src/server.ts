@@ -2,7 +2,7 @@ import express from 'express';
 import { createServer } from 'http';
 import WebSocket from 'ws';
 import { listHandler, messageHandler, deleteHandler } from './mailbox';
-import { statsHandler } from './statistics';
+import { getStats, statsHandler } from './statistics';
 import { subscriber } from './redis';  // Import Redis subscriber
 
 const app = express();
@@ -17,6 +17,32 @@ app.get('/mailbox/:name', listHandler);
 app.get('/mailbox/:name/message/:id', messageHandler);
 app.delete('/mailbox/:name/message/:id', deleteHandler);
 app.get('/health', statsHandler);
+
+async function sendStatsToAllClients() {
+  try {
+    const [queued, denied] = await Promise.all([
+      getStats("queued"),
+      getStats("denied"),
+    ]);
+
+    const statsPayload = {
+      type: "stats",
+      queued,
+      denied,
+    };
+
+    for (const clients of Object.values(mailboxClients)) {
+      for (const ws of clients) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify(statsPayload));
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching or sending stats via WS:', err);
+  }
+}
+
 
 const mailboxClients: Record<string, Set<WebSocket>> = {};
 
@@ -51,15 +77,18 @@ function notifyMailbox(mailbox: string, event: any) {
 
 // Subscribe to all mailbox event channels (pattern subscribe)
 (async () => {
-  await subscriber.pSubscribe('mailbox:events:*', (message, channel) => {
-    try {
-      const event = JSON.parse(message);
-      const mailbox = channel.split(':')[2]; // Extract mailbox from channel name
-      notifyMailbox(mailbox, event);
-    } catch (e) {
-      console.error('Failed to parse Redis pubsub message', e);
-    }
-  });
+  await subscriber.pSubscribe('mailbox:events:*', async (message, channel) => {
+  try {
+    const event = JSON.parse(message);
+    const mailbox = channel.split(':')[2]; // mailbox:events:<mailbox>
+
+    notifyMailbox(mailbox, event);     // send new mail event
+    await sendStatsToAllClients();     // send updated stats to all
+  } catch (e) {
+    console.error('Failed to handle pubsub message:', e);
+  }
+});
+
 })();
 
 server.listen(PORT, () => {
