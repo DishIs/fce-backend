@@ -1,11 +1,12 @@
-FROM ubuntu:latest
+FROM node:20-slim
 
-# Update the package list
-RUN apt-get update
-
-# Install necessary packages including Node.js and npm
-RUN apt-get -y install libarchive-tools dnsutils bind9 supervisor sed nodejs npm
-
+RUN apt-get update && apt-get install -y \
+    bind9 \
+    dnsutils \
+    libarchive-tools \
+    supervisor \
+    sed && \
+    rm -rf /var/lib/apt/lists/*
 # Copy BIND configuration
 COPY --chown=root:bind named.conf.options /etc/bind/
 

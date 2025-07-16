@@ -1,20 +1,44 @@
 #!/bin/bash
+set -e
 
-HOST=${REDIS_HOST:-127.0.0.1}
-PORT=${REDIS_PORT:-6379}
-LOG=${LOG_LEVEL:-info}
-ALTINBOX_MOD=${ALTINBOX_MOD:-1}
+echo "[DITMail] Starting entrypoint..."
 
-sed "/^stats_redis_host=/s/=.*/=${HOST}:${PORT}/" src/config/dnsbl.ini > tmpfile && mv tmpfile src/config/dnsbl.ini
+HOST="${REDIS_HOST:-127.0.0.1}"
+PORT="${REDIS_PORT:-6379}"
+LOG="${LOG_LEVEL:-info}"
+ALTINBOX_MOD="${ALTINBOX_MOD:-1}"
 
-sed "/^host=/s/=.*/=${HOST}/" src/config/greylist.ini > tmpfile && mv tmpfile src/config/greylist.ini
-sed "/^port=/s/=.*/=${PORT}/" src/config/greylist.ini > tmpfile && mv tmpfile src/config/greylist.ini
+echo "[DITMail] Configuring Haraka with:"
+echo "  Redis Host: $HOST"
+echo "  Redis Port: $PORT"
+echo "  Log Level:  $LOG"
+echo "  AltInbox:   $ALTINBOX_MOD"
 
-sed "/^host=/s/=.*/=${HOST}/" src/config/redis.ini > tmpfile && mv tmpfile src/config/redis.ini
-sed "/^port=/s/=.*/=${PORT}/" src/config/redis.ini > tmpfile && mv tmpfile src/config/redis.ini
+# Helper function to safely replace config values
+set_config_value() {
+  local file=$1
+  local key=$2
+  local value=$3
 
-sed "/^level=/s/=.*/=${LOG}/" src/config/log.ini > tmpfile && mv tmpfile src/config/log.ini
+  if [[ -f "$file" ]]; then
+    sed -i "s|^$key=.*|$key=$value|" "$file"
+  else
+    echo "[WARN] File $file not found for setting $key"
+  fi
+}
 
-sed "/^altinbox=/s/=.*/=${ALTINBOX_MOD}/" src/config/altinbox.ini > tmpfile && mv tmpfile src/config/altinbox.ini
+# Redis-based plugin configs
+set_config_value "src/config/dnsbl.ini"      "stats_redis_host" "$HOST:$PORT"
+set_config_value "src/config/greylist.ini"   "host"             "$HOST"
+set_config_value "src/config/greylist.ini"   "port"             "$PORT"
+set_config_value "src/config/redis.ini"      "host"             "$HOST"
+set_config_value "src/config/redis.ini"      "port"             "$PORT"
 
-/usr/bin/supervisord
+# Logging level
+set_config_value "src/config/log.ini"        "level"            "$LOG"
+
+# AltInbox mode
+set_config_value "src/config/altinbox.ini"   "altinbox"         "$ALTINBOX_MOD"
+
+echo "[DITMail] Launching Supervisor..."
+exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
