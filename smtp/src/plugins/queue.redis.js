@@ -1,3 +1,5 @@
+// queue.redis.js
+
 const shortid = require('shortid');
 const format = require('date-fns').format;
 const simpleParser = require('mailparser').simpleParser;
@@ -26,7 +28,6 @@ exports.save_to_redis = function (next, connection) {
   const mailbox_size = ((plugin.cfg.main || {}).mailbox_size || 10) - 1;
   const mailbox_ttl = ((plugin.cfg.main || {}).mailbox_ttl || 3600);
 
-  // plugin.loginfo("saleis.live plugin");
   plugin.logdebug(JSON.stringify(recipients));
 
   if (!!redis) {
@@ -36,9 +37,13 @@ exports.save_to_redis = function (next, connection) {
       chunks.push(chunk);
     });
     stream.on("end", () => {
-      body = Buffer.concat(chunks).toString();
-      plugin.logdebug("have body: " + body);
+      body = Buffer.concat(chunks); // Keep body as a Buffer for simpleParser
       simpleParser(body, (error, parsed) => {
+        if (error) {
+          plugin.logerror("Error parsing email:", error);
+          return next(DENY);
+        }
+        
         recipients.forEach((recipient) => {
           const destination = recipient.user.toLowerCase();
           const key = `mailbox:${destination}`;
@@ -46,16 +51,32 @@ exports.save_to_redis = function (next, connection) {
             id: shortid.generate(),
             from: parsed.from.text,
             to: destination,
-            subject: parsed.headers.get('subject'),
-            date: format(new Date(), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'") // Correctly formatted date
+            subject: parsed.subject || '(no subject)', // Handle missing subject
+            date: format(new Date(), "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'")
           };
-          let html;
-          if (!!parsed.html) {
-            html = parsed.html;
-          } else {
-            html = parsed.textAsHtml;
-          }
-          const messageBody = Object.assign({}, message, { body: body, html: html });
+
+          // --- MODIFICATION START ---
+          // Prepare attachments for JSON by encoding content to Base64
+          const attachments = parsed.attachments.map(att => ({
+            filename: att.filename,
+            contentType: att.contentType,
+            content: att.content.toString('base64'), // Encode buffer to Base64 string
+            size: att.size,
+          }));
+
+          const messageBody = {
+            id: message.id,
+            from: message.from,
+            to: message.to,
+            subject: message.subject,
+            date: message.date,
+            html: parsed.html || parsed.textAsHtml,
+            // DO NOT store the raw body anymore unless you have a specific need for it
+            // body: body.toString(), 
+            attachments: attachments, // Add the prepared attachments array
+          };
+          // --- MODIFICATION END ---
+          
           plugin.logwarn("Saving message from " + connection.transaction.mail_from.original + " to " + destination);
 
           // Save to Redis lists
@@ -66,7 +87,7 @@ exports.save_to_redis = function (next, connection) {
           redis.expire(key, mailbox_ttl);
           redis.expire(key + ":body", mailbox_ttl);
 
-          // *** Publish event for new mail ***
+          // Publish event for new mail
           redis.publish(`mailbox:events:${destination}`, JSON.stringify({
             type: 'new_mail',
             mailbox: destination,
@@ -80,6 +101,6 @@ exports.save_to_redis = function (next, connection) {
         next(OK);
       });
     });
-    stream.resume();
+    stream.resume()
   }
 };

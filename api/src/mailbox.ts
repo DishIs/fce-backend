@@ -29,23 +29,6 @@ export function getMessage(mailbox: string, id: string): Promise<object> {
   });
 }
 
-export function parseHtml(message: any): Promise<object> {
-  if (!!message.body && !message.html) {
-    return simpleParser(message.body).then((result: ParsedMail) => {
-      if (!!result.html) {
-        return Object.assign({}, message, {
-          html: result.html
-        });
-      } else {
-        return Object.assign({}, message, {
-          html: result.textAsHtml,
-        });
-      }
-    });
-  } else {
-    return Promise.resolve(message);
-  }
-}
 
 export function getMessageIndex(key: string, id: string): Promise<number> {
   return new Promise<number>((resolve, reject) => {
@@ -134,14 +117,15 @@ export async function messageHandler(req: any, res: any): Promise<any> {
   try {
     await ratelimit(ip);
     console.log(`client ${ip} requesting mailbox ${mailbox} id ${id}`);
-    const results = await getMessage(mailbox, id);
+    
+    // The result from getMessage is already the fully parsed object we need
+    const messageData = await getMessage(mailbox, id);
 
-    const parsedMessage = await parseHtml(results);
     const encryptedMailbox = encryptMailbox(mailbox);
-    console.log(parsedMessage);
+    console.log(messageData);
     
     // Check if the message exists
-    if (Object.keys(parsedMessage).length === 0) {
+    if (Object.keys(messageData).length === 0) {
       const notFoundResponse = {
         headers: {
           'Access-Control-Allow-Origin': '*',
@@ -153,9 +137,8 @@ export async function messageHandler(req: any, res: any): Promise<any> {
           details: { mailbox: encryptedMailbox, id },
         },
       };
-      return res.status(200).set(notFoundResponse.headers).json(notFoundResponse.body);
+       return res.status(200).set(notFoundResponse.headers).json(notFoundResponse.body);
     }
-
     
     const response = {
       headers: {
@@ -165,8 +148,8 @@ export async function messageHandler(req: any, res: any): Promise<any> {
       body: {
         success: true,
         message: "Message retrieved successfully.",
-        data: parsedMessage,
-        encryptedMailbox, // Return the encrypted mailbox identifier
+        data: messageData, // Use the data directly
+        encryptedMailbox,
       },
     };
 
