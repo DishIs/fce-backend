@@ -1,5 +1,8 @@
 FROM node:20-slim
 
+
+RUN apt-get update && apt-get install -y build-essential python3
+
 RUN apt-get update && apt-get install -y \
     bind9 \
     dnsutils \
