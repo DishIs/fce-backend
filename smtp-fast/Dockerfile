@@ -2,11 +2,14 @@
 FROM node:20-slim
 
 # Best Practice: Combine RUN commands to reduce layers and image size.
+# Add 'supervisor' back to this line
 RUN apt-get update && apt-get install -y \
     build-essential \
     python3 \
     sed \
+    supervisor \
     && rm -rf /var/lib/apt/lists/*
+
 
 # Set working directory early
 WORKDIR /maildrop
