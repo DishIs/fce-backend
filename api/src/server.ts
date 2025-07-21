@@ -4,6 +4,8 @@ import WebSocket from 'ws';
 import { listHandler, messageHandler, deleteHandler } from './mailbox';
 import { getStats, statsHandler } from './statistics';
 import { subscriber } from './redis';  // Import Redis subscriber
+import dotenv from 'dotenv';
+dotenv.config();
 
 const app = express();
 const server = createServer(app);

@@ -1,6 +1,6 @@
 import { createClient } from 'redis';
 
-const REDIS_URL = process.env.REDIS || '127.0.0.1:6379';
+const REDIS_URL = process.env.REDIS;
 
 const client = createClient({ url: `redis://${REDIS_URL}` });
 const subscriber = createClient({ url: `redis://${REDIS_URL}` });
