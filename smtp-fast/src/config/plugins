@@ -8,7 +8,7 @@ access
 
 # HELO PHASE
 # Basic HELO checks are fast.
-helo.checks
+# helo.checks
 
 # MAIL FROM
 # We are removing all DNS checks here (SPF, resolvable) for speed.
