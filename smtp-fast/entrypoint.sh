@@ -28,9 +28,6 @@ set_config_value() {
 }
 
 # Redis-based plugin configs
-set_config_value "src/config/dnsbl.ini"      "stats_redis_host" "$HOST:$PORT"
-set_config_value "src/config/greylist.ini"   "host"             "$HOST"
-set_config_value "src/config/greylist.ini"   "port"             "$PORT"
 set_config_value "src/config/redis.ini"      "host"             "$HOST"
 set_config_value "src/config/redis.ini"      "port"             "$PORT"
 
