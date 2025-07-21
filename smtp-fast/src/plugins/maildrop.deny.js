@@ -27,7 +27,8 @@ exports.rcpt = function (next, connection, params) {
     "ditplay.info",
     "ditube.info",
     "junkstopper.info",
-    "whatsyour.info"
+    "whatsyour.info",
+    "mxtoolboxsmtpdiag.com"  // <-- ADD THIS LINE TEMPORARILY
   ]
 
 
