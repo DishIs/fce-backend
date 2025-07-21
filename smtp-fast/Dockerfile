@@ -26,9 +26,11 @@ COPY src ./src
 COPY entrypoint.sh .
 COPY stop-supervisor.sh .
 
-# --- THIS IS THE FIX ---
-# Add execute permissions to the scripts
 RUN chmod +x ./entrypoint.sh ./stop-supervisor.sh
+
+# --- ADD THIS LINE ---
+# Copy the supervisor configuration file to its required location
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # --- Security Improvement ---
 # Create a non-privileged user for running the application.
