@@ -16,7 +16,6 @@ helo.checks
 # RCPT TO
 # These are essential for accepting mail for your domains.
 rcpt_to.in_host_list
-maildrop.deny
 
 # DATA PHASE
 # Lightweight plugins that operate on the email content.
