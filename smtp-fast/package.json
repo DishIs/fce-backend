@@ -1,0 +1,23 @@
+{
+  "name": "maildrop-smtp",
+  "version": "3.0.0",
+  "description": "Maildrop SMTP server in Javascript",
+  "main": "index.js",
+  "scripts": {
+    "start": "node_modules/.bin/haraka -c src",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Dishant Singh <dishant@singh.email>",
+  "repository": {},
+  "license": "ISC",
+  "dependencies": {
+    "big-integer": "^1.6.52",
+    "date-fns": "^4.1.0",
+    "dateformat": "^5.0.3",
+    "express": "^4.17.1",
+    "Haraka": "^3.0.4",
+    "haraka-plugin-greylist": "^1.0.0",
+    "mailparser": "^3.7.1",
+    "shortid": "^2.2.16"
+  }
+}
