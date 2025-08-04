@@ -55,7 +55,7 @@ connectToMongo().then(() => {
   app.post('/user/domains', addDomainHandler);
   app.post('/user/mute', muteSenderHandler);
 
-  async function sendStatsToAllClients() {
+  async function sendStatsToStatsClientsOnly() {
     try {
       const [queued, denied] = await Promise.all([
         getStats("queued"),
@@ -68,8 +68,9 @@ connectToMongo().then(() => {
         denied,
       };
 
-      for (const clients of Object.values(mailboxClients)) {
-        for (const ws of clients) {
+      const statsClients = mailboxClients["stats"];
+      if (statsClients) {
+        for (const ws of statsClients) {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify(statsPayload));
           }
@@ -79,6 +80,7 @@ connectToMongo().then(() => {
       console.error('Error fetching or sending stats via WS:', err);
     }
   }
+
 
 
   const mailboxClients: Record<string, Set<WebSocket>> = {};
@@ -120,7 +122,7 @@ connectToMongo().then(() => {
         const mailbox = channel.split(':')[2]; // mailbox:events:<mailbox>
 
         notifyMailbox(mailbox, event);     // send new mail event
-        await sendStatsToAllClients();     // send updated stats to all
+        await sendStatsToStatsClientsOnly();     // send updated stats to all
       } catch (e) {
         console.error('Failed to handle pubsub message:', e);
       }
