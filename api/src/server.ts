@@ -7,11 +7,33 @@ import { subscriber } from './redis';  // Import Redis subscriber
 import dotenv from 'dotenv';
 import { connectToMongo } from './mongo';
 import { addDomainHandler, muteSenderHandler } from './user';
+import { deleteDomainHandler, getDashboardDataHandler, unmuteSenderHandler, verifyDomainHandler } from './domain-handler';
 dotenv.config();
 
 connectToMongo().then(() => {
 
   const app = express();
+  const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
+
+  if (!INTERNAL_API_KEY) {
+    throw new Error("FATAL: INTERNAL_API_KEY is not set. The service cannot run securely.");
+  }
+
+  // --- NEW: Security Middleware ---
+  // This middleware will run on ALL incoming requests to this service.
+  const internalApiAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const providedKey = req.header('x-internal-api-key');
+    if (providedKey && providedKey === INTERNAL_API_KEY) {
+      // Key is valid, proceed to the actual route handler
+      return next();
+    }
+    // Key is missing or invalid
+    res.status(401).json({ success: false, message: 'Unauthorized' });
+  };
+
+  // Apply the middleware to all routes
+  app.use(internalApiAuth);
+
   const server = createServer(app);
   const wss = new WebSocket.Server({ server });
 
@@ -23,6 +45,12 @@ connectToMongo().then(() => {
   app.get('/mailbox/:name/message/:id', messageHandler);
   app.delete('/mailbox/:name/message/:id', deleteHandler);
   app.get('/health', statsHandler);
+
+  // Define routes WITH the implemented handlers
+  app.get('/user/:wyiUserId/dashboard-data', getDashboardDataHandler);
+  app.delete('/user/domains', deleteDomainHandler);
+  app.post('/user/domains/verify', verifyDomainHandler);
+  app.delete('/user/mute', unmuteSenderHandler);
   // NEW Routes for Pro Features
   app.post('/user/domains', addDomainHandler);
   app.post('/user/mute', muteSenderHandler);
