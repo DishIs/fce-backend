@@ -1,9 +1,8 @@
 import {client} from "./redis";
 import bigInt from "big-integer";
 import ratelimit from "./ratelimit";
-import { ParsedMail, simpleParser } from "mailparser";
-import { promisify } from "util";
-import { parse } from "path";
+import { gfs } from './mongo'; // Import GridFS bucket
+import { Readable } from 'stream';
 
 const ALTINBOX_MOD: number = parseInt(process.env.ALTINBOX_MOD || "20190422");
 
@@ -22,12 +21,36 @@ export function getInbox(mailbox: string): Promise<Array<object>> {
 
 }
 
-export function getMessage(mailbox: string, id: string): Promise<object> {
-  return client.lRange(`mailbox:${mailbox}:body`, 0, -1).then((results: any[]) => {
-    const message = results.find((result: string) => JSON.parse(result).id === id) || "{}";
-    return JSON.parse(message);
+export function getMessage(mailbox: string, id: string): Promise<any> {
+  return client.lRange(`mailbox:${mailbox}:body`, 0, -1).then(async (results: any[]) => {
+    const messageStr = results.find((result: string) => JSON.parse(result).id === id);
+    if (!messageStr) {
+        return {};
+    }
+    
+    let message = JSON.parse(messageStr);
+
+    // If attachments are stored in GridFS, retrieve them
+    if (message.attachments && message.attachments.length > 0) {
+        for (let i = 0; i < message.attachments.length; i++) {
+            const att = message.attachments[i];
+            if (att.gridfs_id) {
+                const downloadStream = gfs.openDownloadStream(att.gridfs_id);
+                const chunks: Buffer[] = [];
+                for await (const chunk of downloadStream) {
+                    chunks.push(chunk);
+                }
+                // Return content as base64, just like Haraka does for smaller attachments
+                att.content = Buffer.concat(chunks).toString('base64');
+                delete att.gridfs_id; // Clean up the response
+            }
+        }
+    }
+
+    return message;
   });
 }
+
 
 
 export function getMessageIndex(key: string, id: string): Promise<number> {
