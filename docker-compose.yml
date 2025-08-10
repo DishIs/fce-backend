@@ -5,11 +5,10 @@ services:
     build:
       context: ./smtp-fast
     container_name: maildrop-smtp
-    # For SMTP, we keep host networking for direct port 25, 465, 587 binding
     network_mode: host
     environment:
-      REDIS_HOST: localhost
-      MONGO_URI: mongodb://localhost:27017/maildb
+      REDIS_HOST: redis://127.0.0.1:6379
+      MONGO_URI: mongodb://127.0.0.1:27017/freecustomemail
     depends_on:
       - redis
       - mongo
@@ -22,8 +21,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      REDIS_HOST: redis
-      MONGO_URI: mongodb://mongo:27017/maildb
+      REDIS_HOST: redis://redis:6379
+      MONGO_URI: mongodb://mongo:27017/freecustomemail
     depends_on:
       - redis
       - mongo
@@ -34,6 +33,7 @@ services:
     container_name: redis_server
     ports:
       - "6379:6379"
+    command: ["redis-server", "--bind", "0.0.0.0"]
     restart: unless-stopped
 
   mongo:
