@@ -8,13 +8,21 @@ PORT="${REDIS_PORT:-6379}"
 LOG="${LOG_LEVEL:-info}"
 ALTINBOX_MOD="${ALTINBOX_MOD:-1}"
 
+# Auto-generate REDIS_URL if not set
+if [[ -z "$REDIS_URL" ]]; then
+  export REDIS_URL="redis://${HOST}:${PORT}"
+  echo "[DITMail] REDIS_URL not provided, using default: $REDIS_URL"
+else
+  echo "[DITMail] Using provided REDIS_URL: $REDIS_URL"
+fi
+
 echo "[DITMail] Configuring Haraka with:"
 echo "  Redis Host: $HOST"
 echo "  Redis Port: $PORT"
+echo "  Redis URL:  $REDIS_URL"
 echo "  Log Level:  $LOG"
 echo "  AltInbox:   $ALTINBOX_MOD"
 
-# Helper function to safely replace config values
 set_config_value() {
   local file=$1
   local key=$2
@@ -27,15 +35,16 @@ set_config_value() {
   fi
 }
 
-# Redis-based plugin configs
-set_config_value "src/config/redis.ini"      "host"             "$HOST"
-set_config_value "src/config/redis.ini"      "port"             "$PORT"
+# Redis configs
+set_config_value "src/config/redis.ini" "host" "$HOST"
+set_config_value "src/config/redis.ini" "port" "$PORT"
+set_config_value "src/config/redis.ini" "url"  "$REDIS_URL"   # for plugins that expect it
 
 # Logging level
-set_config_value "src/config/log.ini"        "level"            "$LOG"
+set_config_value "src/config/log.ini" "level" "$LOG"
 
 # AltInbox mode
-set_config_value "src/config/altinbox.ini"   "altinbox"         "$ALTINBOX_MOD"
+set_config_value "src/config/altinbox.ini" "altinbox" "$ALTINBOX_MOD"
 
 echo "[DITMail] Launching Supervisor..."
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf

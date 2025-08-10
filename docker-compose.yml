@@ -7,7 +7,8 @@ services:
     container_name: maildrop-smtp
     network_mode: host
     environment:
-      REDIS_HOST: 127.0.0.1
+      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
       REDIS_PORT: 6379
       MONGO_URI: mongodb://127.0.0.1:27017/freecustomemail
     depends_on:
