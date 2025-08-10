@@ -25,9 +25,9 @@ exports.load_ini = function () {
         plugin.load_ini();
     });
 
-    const redisUrl = plugin.cfg.main.redis_url || 'redis://localhost:6379';
-    const mongoUrl = plugin.cfg.main.mongo_url || 'mongodb://localhost:27017';
-    const dbName = plugin.cfg.main.mongo_db_name || 'freecustomemail';
+    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+    const mongoUrl = process.env.MONGO_URI || 'mongodb://localhost:27017';
+    const dbName = 'freecustomemail';
 
     // --- Initialize Redis Connection ---
     if (!redisClient) {
