@@ -17,7 +17,7 @@ exports.register = function () {
 };
 
 exports.load_ini = function () {
-    plugin.cfg = plugin.config.get('queue.redis.ini', 'ini');
+    plugin.cfg = plugin.config.get('redis.ini', 'ini');
     
     // --- Load the list of free domains directly from the other plugin's config ---
     // This is the key to avoiding duplicate configuration.

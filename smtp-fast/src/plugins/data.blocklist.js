@@ -29,58 +29,56 @@ exports.register = function () {
  * Loads the configuration from the .ini file and establishes
  * connections to Redis and MongoDB.
  */
-// In your /smtp-fast/src/plugins/rcpt_to_mongo.js file
-
 exports.load_ini = function () {
+    const plugin = this;
+
+    // The config loader automatically looks for 'data.blocklist.ini'
     plugin.cfg = plugin.config.get('redis.ini', 'ini');
-    
-    // --- Load the list of free domains directly from the other plugin's config ---
-    freeDomains = plugin.config.get('host_list', 'list').map(d => d.toLowerCase());
-    plugin.loginfo(`Loaded ${freeDomains.length} free domains to ignore: ${freeDomains.join(', ')}`);
 
-    // ========================================================================
-    // --- START AGGRESSIVE DEBUGGING ---
-    plugin.logcrit('--- DEBUGGING rcpt_to_mongo ---');
-    try {
-        plugin.logcrit(`plugin.cfg content from redis.ini: ${JSON.stringify(plugin.cfg, null, 2)}`);
-        
-        // Use optional chaining to prevent a crash if sections are missing
-        const redisHost = plugin.cfg?.server?.host;
-        const redisPort = plugin.cfg?.server?.port;
-        
-        plugin.logcrit(`Extracted redisHost: ${redisHost} (type: ${typeof redisHost})`);
-        plugin.logcrit(`Extracted redisPort: ${redisPort} (type: ${typeof redisPort})`);
-        
-        const redisUrl = `redis://${redisHost}:${redisPort}`;
-        plugin.logcrit(`CONSTRUCTED REDIS URL: ${redisUrl}`);
-        // --- END AGGRESSIVE DEBUGGING ---
-        // ========================================================================
+    const redisUrl = plugin.cfg.main.url || 'redis://localhost:6379';
 
-        const mongoUrl = process.env.MONGO_URI || 'mongodb://localhost:27017/freecustomemail';
-        const dbName = 'freecustomemail';
-        
-        if (!redisClient) {
-            // This is the line that is crashing
-            redisClient = createClient({ url: redisUrl }); 
-            redisClient.on('error', (err) => plugin.logerror(`Redis Client Error: ${err}`));
-            redisClient.connect().catch(err => plugin.logerror(`Redis connect failed: ${err}`));
-        }
-        if (!mongoClient) {
-            mongoClient = new MongoClient(mongoUrl);
-            mongoClient.connect()
-                .then(() => {
-                    db = mongoClient.db(dbName);
-                    plugin.loginfo('Successfully connected to MongoDB for custom domains.');
-                })
-                .catch(err => {
-                    plugin.logcrit(`FATAL: Could not connect to MongoDB. Error: ${err}`);
-                });
-        }
-    } catch (e) {
-        plugin.logcrit(`An error occurred during load_ini: ${e.stack}`);
-        throw e; // Re-throw the error to ensure the process stops
+    // Also, you'll need a way to get the mongo URL. The cleanest way is an environment variable.
+    const mongoUrl = process.env.MONGO_URI || 'mongodb://localhost:27017/freecustomemail';
+
+    const dbName = 'freecustomemail'; // You can hardcode this or get it from another config/env var
+
+    // --- Redis Connection ---
+    // Only create a new client if one doesn't already exist.
+    if (!redisClient) {
+        plugin.logdebug(`Connecting to Redis at ${redisUrl}`);
+        redisClient = redis.createClient({ url: redisUrl });
+
+        redisClient.on('error', (err) => {
+            plugin.logerror(`Redis client error: ${err}`);
+        });
+        redisClient.on('connect', () => {
+            plugin.logdebug('Redis client is connecting...');
+        });
+        redisClient.on('ready', () => {
+            plugin.loginfo('Redis client is ready.');
+        });
+
+        // The 'await' here ensures that we don't proceed until the connection is attempted.
+        // Haraka's async startup handles this correctly.
+        redisClient.connect();
+    }
+
+    // --- MongoDB Connection ---
+    // Although not used in the `check_blocklist` hook, we initialize it
+    // here as per the plugin structure for potential future use.
+    if (!mongoClient) {
+        plugin.logdebug(`Connecting to MongoDB at ${mongoUrl}`);
+        mongoClient = new MongoClient(mongoUrl);
+
+        mongoClient.connect().then(() => {
+            plugin.loginfo('MongoDB client connected successfully.');
+            db = mongoClient.db(dbName);
+        }).catch(err => {
+            plugin.logerror(`MongoDB connection failed: ${err}`);
+        });
     }
 };
+
 /**
  * This function is called when Haraka is shutting down.
  * It's crucial to close database connections gracefully.
