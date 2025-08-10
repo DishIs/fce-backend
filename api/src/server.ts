@@ -6,7 +6,7 @@ import { getStats, statsHandler } from './statistics';
 import { subscriber } from './redis';  // Import Redis subscriber
 import dotenv from 'dotenv';
 import { connectToMongo } from './mongo';
-import { addDomainHandler, muteSenderHandler } from './user';
+import { addDomainHandler, getDomainsHandler, muteSenderHandler, upsertUserHandler } from './user';
 import { deleteDomainHandler, getDashboardDataHandler, unmuteSenderHandler, verifyDomainHandler } from './domain-handler';
 dotenv.config();
 
@@ -46,12 +46,18 @@ connectToMongo().then(() => {
   app.delete('/mailbox/:name/message/:id', deleteHandler);
   app.get('/health', statsHandler);
 
+
+  // --- NEW AUTH ROUTE ---
+  app.post('/auth/upsert-user', upsertUserHandler);
+
+
   // Define routes WITH the implemented handlers
   app.get('/user/:wyiUserId/dashboard-data', getDashboardDataHandler);
   app.delete('/user/domains', deleteDomainHandler);
   app.post('/user/domains/verify', verifyDomainHandler);
   app.delete('/user/mute', unmuteSenderHandler);
   // NEW Routes for Pro Features
+  app.get('/user/:wyiUserId/domains', getDomainsHandler);
   app.post('/user/domains', addDomainHandler);
   app.post('/user/mute', muteSenderHandler);
 

@@ -3,6 +3,7 @@ import { db } from './mongo';
 import { client as redisClient } from './redis';
 import { IUser } from './mongo';
 import { v4 as uuidv4 } from 'uuid';
+import { Request, Response } from 'express';
 
 // This function assumes the frontend has authenticated the user and provides the wyiUserId
 // In a real app, you would verify a JWT or access token here.
@@ -61,4 +62,112 @@ export async function muteSenderHandler(req: any, res: any) {
     res.status(200).json({ success: true, message: 'Sender has been muted.' });
 }
 
-// We'd also add handlers for verifying domains (checking DNS TXT records) and un-muting senders.
+/**
+ * --- NEW HANDLER ---
+ * Handles a pro user un-muting a specific sender address.
+ */
+export async function unmuteSenderHandler(req: Request, res: Response) {
+    const { wyiUserId, senderToUnmute } = req.body;
+
+    if (!wyiUserId || !senderToUnmute) {
+        return res.status(400).json({ success: false, message: 'User ID and sender address are required.' });
+    }
+
+    const user = await getUser(wyiUserId);
+
+    // Although anyone can attempt this, we check for the user to ensure the operation is authorized.
+    if (!user) {
+        return res.status(404).json({ success: false, message: 'User not found.' });
+    }
+    
+    // You could also enforce that only pro users can unmute, for consistency.
+    if (user.plan !== 'pro') {
+        return res.status(403).json({ success: false, message: 'Permission denied.' });
+    }
+
+    const sender = senderToUnmute.toLowerCase();
+
+    try {
+        // Remove from the user's document in MongoDB
+        await db.collection('users').updateOne(
+            { wyiUserId },
+            { $pull: { mutedSenders: sender } }
+        );
+
+        // Remove from the user's specific mute list in Redis
+        const userMuteListKey = `mutelist:${wyiUserId}`;
+        await redisClient.sRem(userMuteListKey, sender);
+
+        res.status(200).json({ success: true, message: 'Sender has been un-muted.' });
+
+    } catch (error) {
+        console.error(`Error un-muting sender for user ${wyiUserId}:`, error);
+        res.status(500).json({ success: false, message: 'An internal error occurred.' });
+    }
+}
+
+
+
+export async function upsertUserHandler(req: Request, res: Response) {
+    const { wyiUserId, email, name, plan } = req.body;
+
+    if (!wyiUserId || !email || !name || !plan) {
+        return res.status(400).json({ success: false, message: 'Missing required user data.' });
+    }
+
+    try {
+        const usersCollection = db.collection('users');
+
+        const updateDoc = {
+            $set: {
+                wyiUserId,
+                email,
+                name,
+                plan,
+                lastLoginAt: new Date(),
+            },
+            $setOnInsert: {
+                createdAt: new Date(),
+                inboxes: [],
+                customDomains: [],
+                mutedSenders: [],
+            }
+        };
+
+        const filter = { wyiUserId };
+        const options = { upsert: true };
+
+        await usersCollection.updateOne(filter, updateDoc, options);
+
+        res.status(200).json({ success: true, message: 'User synchronized successfully.' });
+    } catch (error) {
+        console.error('Error during user upsert:', error);
+        res.status(500).json({ success: false, message: 'Internal server error during user synchronization.' });
+    }
+}
+
+// Add a new handler to get all custom domains for a user
+export async function getDomainsHandler(req: Request, res: Response) {
+    const { wyiUserId } = req.params;
+
+    if (!wyiUserId) {
+        return res.status(400).json({ success: false, message: 'User ID is required.' });
+    }
+
+    try {
+        const user = await db.collection('users').findOne(
+            { wyiUserId },
+            { projection: { customDomains: 1, _id: 0 } }
+        );
+
+        if (!user) {
+            // Return an empty array if the user is not found, which is a valid state
+            return res.status(200).json({ success: true, domains: [] });
+        }
+
+        res.status(200).json({ success: true, domains: user.customDomains || [] });
+    } catch (error) {
+        console.error('Error fetching user domains:', error);
+        res.status(500).json({ success: false, message: 'Internal server error.' });
+    }
+}
