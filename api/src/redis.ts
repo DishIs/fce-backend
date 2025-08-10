@@ -7,11 +7,11 @@ const REDIS_HOST = 'localhost:6379/';
 console.log(REDIS_HOST)
 
 const client = createClient({
-  url: `redis://${REDIS_HOST}`,
+  url: `${REDIS_HOST}`,
 });
 
 const subscriber = createClient({
-  url: `redis://${REDIS_HOST}`
+  url: `${REDIS_HOST}`
 });
 
 client.on('error', (err) => console.log('Redis Client Error', err));
