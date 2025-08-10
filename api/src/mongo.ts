@@ -60,3 +60,4 @@ export interface ISavedEmail {
     date: Date;
     // ... other fields from the mail object
 }
+

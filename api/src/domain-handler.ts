@@ -1,7 +1,7 @@
 // Example: In a new file api/src/handlers.ts in your Service API project
 
 import { Request, Response } from 'express';
-import { db } from './mongo'; // Assuming db is exported from your mongo connection file
+import { db, IUser } from './mongo'; // Assuming db is exported from your mongo connection file
 import { client } from './redis'; // Assuming client is exported
 import { promises as dns } from 'dns'; // <-- Import the dns promises API
 
@@ -38,10 +38,13 @@ export async function deleteDomainHandler(req: Request, res: Response) {
     }
 
     try {
-        const updateResult = await db.collection('users').updateOne(
+        const usersCollection = db.collection<IUser>('users');
+
+        const updateResult = await usersCollection.updateOne(
             { wyiUserId },
             { $pull: { customDomains: { domain: domain.toLowerCase() } } }
         );
+
 
         if (updateResult.modifiedCount === 0) {
             return res.status(404).json({ success: false, message: 'Domain not found for this user.' });
