@@ -24,9 +24,9 @@ exports.load_ini = function () {
     freeDomains = plugin.config.get('host_list', 'list').map(d => d.toLowerCase());
     plugin.loginfo(`Loaded ${freeDomains.length} free domains to ignore: ${freeDomains.join(', ')}`);
 
-    const redisUrl = plugin.cfg.main.redis_url || 'redis://localhost:6379';
-    const mongoUrl = plugin.cfg.main.mongo_url || 'mongodb://localhost:27017';
-    const dbName = plugin.cfg.main.mongo_db_name || 'freecustomemail';
+    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+    const mongoUrl = process.env.MONGO_URI || 'mongodb://localhost:27017';
+    const dbName = 'freecustomemail';
     
     if (!redisClient) {
         redisClient = createClient({ url: redisUrl });

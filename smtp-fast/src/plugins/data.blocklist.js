@@ -35,7 +35,7 @@ exports.load_ini = function () {
     // The config loader automatically looks for 'data.blocklist.ini'
     plugin.cfg = plugin.config.get('redis.ini', 'ini');
 
-    const redisUrl = plugin.cfg.main.url || 'redis://localhost:6379';
+    const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
 
     // Also, you'll need a way to get the mongo URL. The cleanest way is an environment variable.
     const mongoUrl = process.env.MONGO_URI || 'mongodb://localhost:27017/freecustomemail';
