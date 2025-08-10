@@ -33,7 +33,7 @@ exports.load_ini = function () {
     const plugin = this;
 
     // The config loader automatically looks for 'data.blocklist.ini'
-    plugin.cfg = plugin.config.get('data.blocklist.ini', 'ini');
+    plugin.cfg = plugin.config.get('queue.redis.ini', 'ini');
 
     const redisUrl = plugin.cfg.main.redis_url || 'redis://localhost:6379';
     const mongoUrl = plugin.cfg.main.mongo_url || 'mongodb://localhost:27017';
