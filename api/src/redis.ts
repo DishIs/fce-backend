@@ -2,7 +2,7 @@ import { createClient } from 'redis';
 import dotenv from 'dotenv';
 dotenv.config();
 
-const REDIS_HOST = process.env.REDIS_HOST || 'localhost:6379';
+const REDIS_HOST = 'localhost:6379/';
 
 console.log(REDIS_HOST)
 
