@@ -38,13 +38,21 @@ set_config_value() {
 # Redis configs
 set_config_value "src/config/redis.ini" "host" "$HOST"
 set_config_value "src/config/redis.ini" "port" "$PORT"
-set_config_value "src/config/redis.ini" "url"  "$REDIS_URL"   # for plugins that expect it
+set_config_value "src/config/redis.ini" "url"  "$REDIS_URL"
 
 # Logging level
 set_config_value "src/config/log.ini" "level" "$LOG"
 
 # AltInbox mode
 set_config_value "src/config/altinbox.ini" "altinbox" "$ALTINBOX_MOD"
+
+# ====================================================================
+# --- NEW DEBUG STEP: VERIFY PLUGIN CONTENT ---
+echo "[DITMail] >>> Verifying content of rcpt_to_mongo.js START <<<"
+cat /maildrop/src/plugins/rcpt_to_mongo.js || echo "[DITMail] ERROR: Could not cat the plugin file at that path."
+echo "[DITMail] >>> Verifying content of rcpt_to_mongo.js END <<<"
+# --- END OF DEBUG STEP ---
+# ====================================================================
 
 echo "[DITMail] Launching Supervisor..."
 exec /usr/bin/supervisord -c /etc/supervisor/conf.d/supervisord.conf
