@@ -33,11 +33,14 @@ exports.load_ini = function () {
     const plugin = this;
 
     // The config loader automatically looks for 'data.blocklist.ini'
-    plugin.cfg = plugin.config.get('queue.redis.ini', 'ini');
+    plugin.cfg = plugin.config.get('redis.ini', 'ini');
 
-    const redisUrl = plugin.cfg.main.redis_url || 'redis://localhost:6379';
-    const mongoUrl = plugin.cfg.main.mongo_url || 'mongodb://localhost:27017';
-    const dbName = plugin.cfg.main.mongo_db_name || 'freecustomemail'; // The name of your database
+    const redisUrl = plugin.cfg.main.url || 'redis://localhost:6379';
+
+    // Also, you'll need a way to get the mongo URL. The cleanest way is an environment variable.
+    const mongoUrl = process.env.MONGO_URI || 'mongodb://localhost:27017/freecustomemail';
+
+    const dbName = 'freecustomemail'; // You can hardcode this or get it from another config/env var
 
     // --- Redis Connection ---
     // Only create a new client if one doesn't already exist.
@@ -66,7 +69,7 @@ exports.load_ini = function () {
     if (!mongoClient) {
         plugin.logdebug(`Connecting to MongoDB at ${mongoUrl}`);
         mongoClient = new MongoClient(mongoUrl);
-        
+
         mongoClient.connect().then(() => {
             plugin.loginfo('MongoDB client connected successfully.');
             db = mongoClient.db(dbName);
@@ -109,7 +112,7 @@ exports.check_blocklist = async function (next, connection) {
     // An email can have multiple recipients. We must check each one.
     for (const recipient of recipients) {
         const recipientAddress = `${recipient.user}@${recipient.host}`.toLowerCase();
-        
+
         // --- CRITICAL STEP: Find the owner of the inbox ---
         // This plugin assumes that your API maintains a Redis key that maps an
         // inbox address to the unique ID of the user who owns it.
@@ -125,7 +128,7 @@ exports.check_blocklist = async function (next, connection) {
         // The key for the user's personal mute list Set in Redis.
         // This is consistent with what the API writes to.
         const userMuteListKey = `mutelist:${inboxOwnerId}`;
-        
+
         try {
             // sIsMember is an O(1) operation, making this check extremely fast.
             const isMuted = await redisClient.sIsMember(userMuteListKey, sender);
