@@ -6,7 +6,7 @@ import { getStats, statsHandler } from './statistics';
 import { subscriber } from './redis';  // Import Redis subscriber
 import dotenv from 'dotenv';
 import { connectToMongo } from './mongo';
-import { addDomainHandler, getDomainsHandler, muteSenderHandler, upsertUserHandler } from './user';
+import { addDomainHandler, getDomainsHandler, getUserProfileHandler, muteSenderHandler, upsertUserHandler } from './user';
 import { deleteDomainHandler, getDashboardDataHandler, unmuteSenderHandler, verifyDomainHandler } from './domain-handler';
 dotenv.config();
 
@@ -49,6 +49,7 @@ connectToMongo().then(() => {
 
   // --- NEW AUTH ROUTE ---
   app.post('/auth/upsert-user', upsertUserHandler);
+  app.get('/user/profile/:wyiUserId', getUserProfileHandler);
 
 
   // Define routes WITH the implemented handlers

@@ -171,3 +171,31 @@ export async function getDomainsHandler(req: Request, res: Response) {
         res.status(500).json({ success: false, message: 'Internal server error.' });
     }
 }
+
+export async function getUserProfileHandler(req: Request, res: Response) {
+    const { wyiUserId } = req.params;
+
+    if (!wyiUserId) {
+        return res.status(400).json({ success: false, message: 'User ID is required.' });
+    }
+
+    try {
+        const user = await db.collection('users').findOne(
+            { wyiUserId: wyiUserId },
+            { 
+                // Exclude sensitive or internal fields if necessary
+                projection: { _id: 0, password: 0 } 
+            }
+        );
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found.' });
+        }
+
+        return res.status(200).json({ success: true, user: user });
+
+    } catch (error) {
+        console.error(`API Error fetching profile for user ${wyiUserId}:`, error);
+        return res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
+}
