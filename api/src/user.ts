@@ -13,16 +13,52 @@ async function getUser(wyiUserId: string): Promise<IUser | null> {
 
 // Handler to add a custom domain for a pro user
 export async function addDomainHandler(req: any, res: any) {
-    const { wyiUserId, domain } = req.body; // Assume frontend sends this
+    const { wyiUserId, domain } = req.body;
+
+    // Normalize domain to lowercase for consistency
+    const normalizedDomain = domain?.trim().toLowerCase();
+
+    if (!normalizedDomain) {
+        return res.status(400).json({ success: false, message: 'Domain is required.' });
+    }
+
     const user = await getUser(wyiUserId);
 
     if (!user || user.plan !== 'pro') {
         return res.status(403).json({ success: false, message: 'Permission denied.' });
     }
 
+    // 1. Check if this domain is already verified for another user
+    const existing = await db.collection('users').findOne({
+        "customDomains.domain": normalizedDomain,
+        "customDomains.verified": true,
+        wyiUserId: { $ne: wyiUserId } // exclude current user
+    });
+
+    if (existing) {
+        return res.status(409).json({
+            success: false,
+            message: 'This domain is already verified for another account.'
+        });
+    }
+
+    // 2. Check if this user already has the domain (verified or not)
+    const alreadyExists = await db.collection('users').findOne({
+        _id: user._id,
+        "customDomains.domain": normalizedDomain
+    });
+
+    if (alreadyExists) {
+        return res.status(409).json({
+            success: false,
+            message: 'You have already added this domain.'
+        });
+    }
+
+    // 3. Create TXT verification record
     const txtRecord = `freecustomemail-verification=${uuidv4()}`;
     const newDomain = {
-        domain,
+        domain: normalizedDomain,
         verified: false,
         mxRecord: 'mx.freecustom.email',
         txtRecord
@@ -41,6 +77,7 @@ export async function addDomainHandler(req: any, res: any) {
         data: newDomain
     });
 }
+
 
 // Handler for a user to mute a sender
 export async function muteSenderHandler(req: any, res: any) {

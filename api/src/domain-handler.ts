@@ -20,7 +20,7 @@ export async function getDashboardDataHandler(req: Request, res: Response) {
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not found.' });
         }
-        
+
         res.json({
             success: true,
             customDomains: user.customDomains || [],
@@ -55,7 +55,7 @@ export async function deleteDomainHandler(req: Request, res: Response) {
 
         res.status(200).json({ success: true, message: 'Domain deleted.' });
     } catch (error) {
-         res.status(500).json({ success: false, message: 'Internal server error.' });
+        res.status(500).json({ success: false, message: 'Internal server error.' });
     }
 }
 
@@ -64,7 +64,7 @@ export async function unmuteSenderHandler(req: Request, res: Response) {
     if (!senderToUnmute || !wyiUserId) {
         return res.status(400).json({ success: false, message: 'Sender and User ID are required.' });
     }
-    
+
     client.sRem(`mutelist:${wyiUserId}`, senderToUnmute.toLowerCase())
 
     res.status(200).json({ success: true, message: 'Sender un-muted.' });
@@ -92,39 +92,42 @@ export async function verifyDomainHandler(req: Request, res: Response) {
         if (domainRecord.verified) {
             return res.status(200).json({ success: true, verified: true, message: 'Domain is already verified.' });
         }
-        
+
         // 2. Perform the actual DNS lookup for the TXT record
         let txtRecords: string[][] = [];
         try {
             txtRecords = await dns.resolveTxt(domain);
         } catch (dnsError: any) {
-            // Common errors: ENODATA (no records), ENOTFOUND (domain doesn't exist)
             if (dnsError.code === 'ENODATA' || dnsError.code === 'ENOTFOUND') {
-                 return res.status(400).json({ success: false, verified: false, message: 'TXT record not found. It may not have propagated yet.' });
+                return res.status(400).json({ success: false, verified: false, message: 'TXT record not found. It may not have propagated yet.' });
             }
-            // For other DNS errors, log them and return a generic error
             console.error(`DNS lookup failed for ${domain}:`, dnsError);
             throw new Error('Could not query DNS records for the domain.');
         }
 
         // 3. Check if any of the found TXT records match our required value
-        // Note: resolveTxt returns an array of arrays of strings for some reason.
         const expectedTxtValue = domainRecord.txtRecord;
         const isVerified = txtRecords.flat().includes(expectedTxtValue);
 
         if (isVerified) {
-            // 4. If verified, update the database and Redis cache
+            // 4. Mark verified in the current user's record
             await db.collection('users').updateOne(
                 { wyiUserId, "customDomains.domain": domain },
                 { $set: { "customDomains.$.verified": true } }
             );
 
-            // Add to the Redis cache so Haraka can start accepting emails
+            // 5. Remove this domain from ALL other users
+            await db.collection('users').updateMany(
+                { wyiUserId: { $ne: wyiUserId } },
+                { $pull: { customDomains: { domain: domain } } as any } // <-- cast to any
+            );
+
+
+            // 6. Add to Redis cache so Haraka can start accepting emails
             await client.sAdd('verified_custom_domains', domain.toLowerCase());
-            
+
             return res.status(200).json({ success: true, verified: true, message: 'Domain successfully verified!' });
         } else {
-            // 5. If not verified, inform the user
             return res.status(400).json({ success: false, verified: false, message: 'TXT record found, but the value does not match. Please double-check.' });
         }
 

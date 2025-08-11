@@ -4,6 +4,7 @@
 
 const { createClient } = require('redis');
 const { MongoClient } = require('mongodb');
+const dns = require('dns').promises;
 
 // --- Module-level variables for persistent connections ---
 let redisClient;
@@ -20,7 +21,7 @@ exports.register = function () {
 
 exports.load_ini = function () {
     plugin.cfg = plugin.config.get('redis.ini', 'ini');
-    
+
     // --- Load the list of free domains directly from the other plugin's config ---
     // This is the key to avoiding duplicate configuration.
     freeDomains = plugin.config.get('host_list', 'list').map(d => d.toLowerCase());
@@ -29,7 +30,7 @@ exports.load_ini = function () {
     const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
     const mongoUrl = process.env.MONGO_URI || 'mongodb://localhost:27017';
     const dbName = 'freecustomemail';
-    
+
     if (!redisClient) {
         redisClient = createClient({ url: redisUrl });
         redisClient.on('error', (err) => plugin.logerror(`Redis Client Error: ${err}`));
@@ -73,7 +74,7 @@ exports.check_custom_domain = async function (next, connection, params) {
         plugin.logerror("A database connection is not available for custom domain check.");
         return next(DENYSOFT, "Backend service is temporarily unavailable.");
     }
-    
+
     const customDomainsSetKey = 'verified_custom_domains';
 
     try {
@@ -87,26 +88,53 @@ exports.check_custom_domain = async function (next, connection, params) {
         // 2. If not in cache, query MongoDB for verified pro domains.
         const userWithDomain = await db.collection('users').findOne({
             "customDomains.domain": domain,
-            "customDomains.verified": true,
+            "customDomains.verified": true, // ✅ Only verified ones
             "plan": "pro"
         });
 
         if (userWithDomain) {
-            connection.logdebug(plugin, `Domain ${domain} verified in MongoDB. Accepting and caching.`);
-            
-            // Add to Redis cache for all subsequent requests.
-            redisClient.sAdd(customDomainsSetKey, domain).catch(err => {
-                plugin.logerror(`Failed to cache domain ${domain} in Redis: ${err}`);
-            });
+            // Find the exact domain record to get its TXT verification value
+            const domainRecord = userWithDomain.customDomains.find(d => d.domain === domain && d.verified);
+            const expectedTxtValue = domainRecord?.txtRecord;
 
-            return next(OK); // Accept the recipient.
+            if (!expectedTxtValue) {
+                plugin.logerror(`Verified domain ${domain} has no TXT record stored.`);
+                return next(DENY, `Invalid domain verification setup for ${domain}`);
+            }
+
+            try {
+                // DNS lookup to ensure the TXT record still matches
+                const txtRecords = await dns.resolveTxt(domain);
+                const isVerified = txtRecords.flat().includes(expectedTxtValue);
+
+                if (!isVerified) {
+                    // TXT record no longer matches — instantly set verified=false
+                    await db.collection('users').updateOne(
+                        { _id: userWithDomain._id, "customDomains.domain": domain },
+                        { $set: { "customDomains.$.verified": false } }
+                    );
+
+                    // Remove from Redis cache if present
+                    await redisClient.sRem(customDomainsSetKey, domain);
+
+                    plugin.logerror(`TXT record mismatch for ${domain}. Verification revoked.`);
+                    return next(DENY, `Domain ${domain} TXT record mismatch. Contact admin to re-verify.`);
+                }
+
+                // ✅ Passed DNS check — cache and accept
+                await redisClient.sAdd(customDomainsSetKey, domain);
+                connection.logdebug(plugin, `Domain ${domain} passed DNS TXT check and verified.`);
+                return next(OK);
+
+            } catch (err) {
+                plugin.logerror(`DNS lookup failed for ${domain}: ${err.message}`);
+                return next(DENYSOFT, `Could not verify TXT record for ${domain}. Try again later.`);
+            }
         }
 
-        // 3. Final Decision: The domain is not a free domain AND not a pro domain.
-        // Let the next plugin (rcpt_to.in_host_list) handle the final DENY.
-        connection.logdebug(plugin, `Domain ${domain} is not a pro custom domain. Deferring.`);
+        // No verified entry → skip
+        connection.logdebug(plugin, `Domain ${domain} not found as verified in MongoDB. Deferring.`);
         next();
-
     } catch (e) {
         plugin.logerror(`Error checking custom domain ${domain}: ${e.stack}`);
         next(DENYSOFT, 'Temporary backend error during address validation.');
