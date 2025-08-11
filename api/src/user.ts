@@ -21,24 +21,25 @@ export async function addDomainHandler(req: any, res: any) {
     }
 
     const txtRecord = `freecustomemail-verification=${uuidv4()}`;
+    const newDomain = {
+        domain,
+        verified: false,
+        mxRecord: 'mx.freecustom.email',
+        txtRecord
+    };
+
     await db.collection('users').updateOne(
         { _id: user._id },
-        {
-            $addToSet: {
-                customDomains: {
-                    domain,
-                    verified: false,
-                    mxRecord: 'mx.freecustom.email', // Your MX record
-                    txtRecord
-                }
-            }
-        }
+        { $addToSet: { customDomains: newDomain } }
     );
-    
-    // Invalidate domain cache
+
     await redisClient.del('custom_domains');
 
-    res.status(200).json({ success: true, message: 'Domain added. Please add TXT record for verification.' });
+    res.status(200).json({
+        success: true,
+        message: 'Domain added. Please add TXT record for verification.',
+        data: newDomain
+    });
 }
 
 // Handler for a user to mute a sender
@@ -54,11 +55,11 @@ export async function muteSenderHandler(req: any, res: any) {
         { _id: user._id },
         { $addToSet: { mutedSenders: senderToMute.toLowerCase() } }
     );
-    
+
     // Update the cached mute list for this user
     const userMuteListKey = `mutelist:${user.wyiUserId}`;
     await redisClient.sAdd(userMuteListKey, senderToMute.toLowerCase());
-    
+
     res.status(200).json({ success: true, message: 'Sender has been muted.' });
 }
 
@@ -79,7 +80,7 @@ export async function unmuteSenderHandler(req: Request, res: Response) {
     if (!user) {
         return res.status(404).json({ success: false, message: 'User not found.' });
     }
-    
+
     // You could also enforce that only pro users can unmute, for consistency.
     if (user.plan !== 'pro') {
         return res.status(403).json({ success: false, message: 'Permission denied.' });
@@ -182,9 +183,9 @@ export async function getUserProfileHandler(req: Request, res: Response) {
     try {
         const user = await db.collection('users').findOne(
             { wyiUserId: wyiUserId },
-            { 
+            {
                 // Exclude sensitive or internal fields if necessary
-                projection: { _id: 0, password: 0 } 
+                projection: { _id: 0, password: 0 }
             }
         );
 
