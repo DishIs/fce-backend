@@ -1,1 +1,5 @@
-5000000
+# /smtp-fast/src/config/smtp.ini
+
+# Set the maximum email size to 26 megabytes.
+# 26 * 1024 * 1024 = 27262976
+databytes=27262976
