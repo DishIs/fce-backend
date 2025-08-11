@@ -20,20 +20,27 @@ connectToMongo().then(() => {
     throw new Error("FATAL: INTERNAL_API_KEY is not set. The service cannot run securely.");
   }
 
-  // --- NEW: Security Middleware ---
-  // This middleware will run on ALL incoming requests to this service.
+  // --- Security Middleware for HTTP ONLY ---
+  // Apply to all HTTP routes EXCEPT WebSocket upgrade requests
   const internalApiAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const providedKey = req.header('x-internal-api-key');
     if (providedKey && providedKey === INTERNAL_API_KEY) {
-      // Key is valid, proceed to the actual route handler
       return next();
     }
-    // Key is missing or invalid
     res.status(401).json({ success: false, message: 'Unauthorized' });
   };
 
-  // Apply the middleware to all routes
-  app.use(internalApiAuth);
+  // Apply middleware only on normal HTTP requests, NOT on upgrade requests (which have "upgrade" header)
+  app.use((req, res, next) => {
+    if (req.headers.upgrade && req.headers.upgrade.toLowerCase() === 'websocket') {
+      // This is a WebSocket upgrade request – skip auth middleware here
+      next();
+    } else {
+      // Normal HTTP request – run the auth middleware
+      internalApiAuth(req, res, next);
+    }
+  });
+
 
   const server = createServer(app);
   const wss = new WebSocket.Server({ server });
@@ -69,13 +76,13 @@ connectToMongo().then(() => {
         getStats("queued"),
         getStats("denied"),
       ]);
-
+  
       const statsPayload = {
         type: "stats",
         queued,
         denied,
       };
-
+  
       const statsClients = mailboxClients["stats"];
       if (statsClients) {
         for (const ws of statsClients) {
@@ -88,21 +95,19 @@ connectToMongo().then(() => {
       console.error('Error fetching or sending stats via WS:', err);
     }
   }
-
-
-
+  
   const mailboxClients: Record<string, Set<WebSocket>> = {};
-
+  
   wss.on('connection', (ws: WebSocket, req) => {
     const mailbox = new URLSearchParams(req.url?.split('?')[1]).get('mailbox');
     if (!mailbox) {
       ws.close();
       return;
     }
-
+  
     if (!mailboxClients[mailbox]) mailboxClients[mailbox] = new Set();
     mailboxClients[mailbox].add(ws);
-
+  
     ws.on('close', () => {
       mailboxClients[mailbox].delete(ws);
       if (mailboxClients[mailbox].size === 0) {
@@ -110,7 +115,7 @@ connectToMongo().then(() => {
       }
     });
   });
-
+  
   function notifyMailbox(mailbox: string, event: any) {
     const clients = mailboxClients[mailbox];
     if (clients) {
@@ -121,23 +126,23 @@ connectToMongo().then(() => {
       }
     }
   }
-
+  
   // Subscribe to all mailbox event channels (pattern subscribe)
   (async () => {
     await subscriber.pSubscribe('mailbox:events:*', async (message, channel) => {
       try {
         const event = JSON.parse(message);
         const mailbox = channel.split(':')[2]; // mailbox:events:<mailbox>
-
+  
         notifyMailbox(mailbox, event);     // send new mail event
         await sendStatsToStatsClientsOnly();     // send updated stats to all
       } catch (e) {
         console.error('Failed to handle pubsub message:', e);
       }
     });
-
+  
   })();
-
+  
   server.listen(PORT, () => {
     console.log(`Server + WS running on http://localhost:${PORT}`);
   });
