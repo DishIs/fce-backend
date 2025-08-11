@@ -1,11 +1,9 @@
-version: "3.9"
-
+# You can remove the version: "3.9" line
 services:
   haraka:
     build:
       context: ./smtp-fast
     container_name: maildrop-smtp
-    # network_mode: host
     ports:
       - "25:25"
       - "587:587"
@@ -39,8 +37,14 @@ services:
     container_name: redis_server
     ports:
       - "6379:6379"
-    command: [ "redis-server", "--bind", "0.0.0.0" ]
+    # --- CHANGE THIS LINE ---
+    # Add the --appendonly flag to enable saving data to disk
+    command: [ "redis-server", "--bind", "0.0.0.0", "--appendonly", "yes" ]
     restart: unless-stopped
+    # --- ADD THIS SECTION ---
+    # Map the redis_data volume to the directory where Redis stores its data
+    volumes:
+      - redis_data:/data
 
   mongo:
     image: mongo:7
@@ -51,5 +55,8 @@ services:
       - mongo_data:/data/db
     restart: unless-stopped
 
+# --- ADD THIS LINE ---
+# Declare the new named volume
 volumes:
   mongo_data:
+  redis_data:
