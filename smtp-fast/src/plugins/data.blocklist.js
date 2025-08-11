@@ -1,7 +1,7 @@
 // This Haraka plugin checks incoming emails at the DATA stage.
 // It uses Redis to perform a very fast check to see if the recipient
 // has muted (or blocked) the sender's email address.
-
+// /home/dit/maildrop/smtp-fast/src/plugins/data.blocklist.js
 const redis = require('redis');
 const { MongoClient } = require('mongodb');
 

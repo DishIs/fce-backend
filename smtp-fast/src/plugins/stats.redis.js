@@ -1,3 +1,5 @@
+// /home/dit/maildrop/smtp-fast/src/plugins/stats.redis.js
+
 exports.register = function () {
   const plugin = this;
   plugin.register_hook('queue_ok', 'queued');

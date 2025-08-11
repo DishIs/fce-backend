@@ -1,3 +1,5 @@
+// /home/dit/maildrop/smtp-fast/src/plugins/queue.redis.js
+
 'use strict';
 
 const shortid = require('shortid');
@@ -114,7 +116,7 @@ exports.tiered_save = async function (next, connection) {
         const parsed = await simpleParser(stream);
 
         for (const recipient of connection.transaction.rcpt_to) {
-            const destination = recipient.user.toLowerCase();
+            const destination = `${recipient.user}@${recipient.host}`.toLowerCase();
             const { plan, userId } = await getUserData(destination);
 
             plugin.logdebug(`Processing email for ${destination} with plan: ${plan}`);
@@ -154,7 +156,7 @@ exports.tiered_save = async function (next, connection) {
                     attachmentsRemoved = true;
                     continue; // Skip attachment, too large for this plan
                 }
-                
+
                 if (plan === 'pro') {
                     // For Pro, stream to GridFS and store references
                     const uploadStream = gfs.openUploadStream(att.filename, {
@@ -185,7 +187,7 @@ exports.tiered_save = async function (next, connection) {
                 const notice = "<br><p><i>[One or more attachments were removed. Your plan may have a size limit, or you may need to log in.]</i></p>";
                 parsed.html = parsed.html ? parsed.html + notice : parsed.textAsHtml + notice;
             }
-            
+
             // --- 3. Construct Message Objects ---
             const messageId = shortid.generate();
             const messageDate = new Date();
@@ -238,12 +240,12 @@ exports.tiered_save = async function (next, connection) {
                     mailbox: destination,
                     ...redisSummary,
                 }));
-            
+
             if (cfg.mailbox_ttl) {
                 multi.expire(key, cfg.mailbox_ttl);
                 multi.expire(`${key}:body`, cfg.mailbox_ttl);
             }
-            
+
             await multi.exec();
             plugin.loginfo(`Successfully queued message ${messageId} for ${destination}`);
         }
