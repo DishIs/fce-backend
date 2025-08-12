@@ -25,7 +25,7 @@ services:
     command: >
       "certbot certonly --webroot
       --webroot-path=/var/www/certbot
-      --email you@example.com
+      --email dishantsinghdev@gmail.com
       --agree-tos --no-eff-email
       --key-type ecdsa --elliptic-curve secp384r1
       -d api2.freecustom.email
