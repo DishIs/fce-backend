@@ -20,7 +20,7 @@ interface UserJwtPayload {
 function getPlanFromRequest(req: any): 'pro' | 'free' | 'anonymous' {
     const authHeader = req.headers.authorization;
     console.log('secret: ',JWT_SECRET)
-    console.log('header: ',authHeader)
+    console.log('header: ',req.headers, req, req.headers.authorization)
     if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.substring(7, authHeader.length);
         console.log('Token: ',token)
