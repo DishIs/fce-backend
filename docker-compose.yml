@@ -9,18 +9,9 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d
       - certs:/etc/letsencrypt
       - ./certbot-webroot:/var/www/certbot
-    depends_on:
-      - api
     restart: unless-stopped
-    command: >
-      /bin/sh -c "
-        echo 'Waiting for certificate to be generated...'
-        while [ ! -f /etc/letsencrypt/live/api2.freecustom.email/fullchain.pem ]; do
-          sleep 2;
-        done;
-        echo 'Certificate found, starting nginx.';
-        nginx -g 'daemon off;';
-      "
+    command: nginx -g 'daemon off;'
+
 
   certbot:
     image: certbot/certbot
