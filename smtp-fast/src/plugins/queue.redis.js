@@ -6,7 +6,6 @@ const { simpleParser } = require('mailparser');
 const { createClient } = require('redis');
 const { MongoClient, GridFSBucket, ObjectId } = require('mongodb');
 const { Readable } = require('stream');
-const jwt = require('jsonwebtoken'); // Assuming JWT library is available
 
 let redisClient;
 let mongoClient;
