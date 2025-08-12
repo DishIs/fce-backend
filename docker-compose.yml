@@ -19,22 +19,40 @@ services:
     volumes:
       - certs:/etc/letsencrypt
       - ./certbot-webroot:/var/www/certbot
+      - ./smtp-fast/src/config:/haraka-config # Add this line
     entrypoint: /bin/sh -c
+    # Modified command to copy certs after creation
     command: >
-      certbot certonly --webroot
+      "certbot certonly --webroot
       --webroot-path=/var/www/certbot
       --email you@example.com
       --agree-tos --no-eff-email
       --key-type ecdsa --elliptic-curve secp384r1
       -d api2.freecustom.email
-      -d mail.freecustom.email
-  
+      -d mail.freecustom.email &&
+      echo 'Copying initial certs to Haraka config...' &&
+      cp /etc/letsencrypt/live/api2.freecustom.email/privkey.pem /haraka-config/tls_key.pem &&
+      cp /etc/letsencrypt/live/api2.freecustom.email/fullchain.pem /haraka-config/tls_cert.pem"
+
   certbot-renew:
     image: certbot/certbot
     volumes:
       - certs:/etc/letsencrypt
       - ./certbot-webroot:/var/www/certbot
-    entrypoint: sh -c "certbot renew --quiet && nginx -s reload && pkill -HUP haraka"
+      - ./smtp-fast/src/config:/haraka-config # Add this line
+    # Modified entrypoint to copy certs after renewal
+    entrypoint: >
+      sh -c "
+        while :; do
+          certbot renew --quiet &&
+          echo 'Copying renewed certs to Haraka config...' &&
+          cp /etc/letsencrypt/live/api2.freecustom.email/privkey.pem /haraka-config/tls_key.pem &&
+          cp /etc/letsencrypt/live/api2.freecustom.email/fullchain.pem /haraka-config/tls_cert.pem &&
+          nginx -s reload &&
+          pkill -HUP haraka;
+          sleep 12h;
+        done
+      "
     depends_on:
       - nginx
       - haraka
@@ -68,7 +86,6 @@ services:
       REDIS_PORT: 6379
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
     volumes:
-      - certs:/etc/letsencrypt:ro
       - ./smtp-fast/src/config:/smtp-fast/src/config
     depends_on:
       - redis
