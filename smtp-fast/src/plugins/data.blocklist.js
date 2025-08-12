@@ -1,6 +1,3 @@
-// This Haraka plugin checks incoming emails at the DATA stage.
-// It uses Redis to perform a very fast check to see if the recipient
-// has muted (or blocked) the sender's email address.
 // /home/dit/maildrop/smtp-fast/src/plugins/data.blocklist.js
 const redis = require('redis');
 const { MongoClient } = require('mongodb');
@@ -12,76 +9,54 @@ let db;
 
 /**
  * The register function is the entry point for the plugin.
- * It's called once when Haraka starts.
  */
 exports.register = function () {
     this.loginfo("Initializing data.blocklist plugin");
-
-    // Loads configuration from data.blocklist.ini
     this.load_ini();
-
-    // Register the function to run at the 'data' hook.
-    // This hook runs after the DATA command is received, but before the email body is accepted.
     this.register_hook('data', 'check_blocklist');
 };
 
 /**
- * Loads the configuration from the .ini file and establishes
- * connections to Redis and MongoDB.
+ * Loads the configuration and establishes connections to Redis and MongoDB.
+ * This function is now async to ensure connections are ready before proceeding.
  */
-exports.load_ini = function () {
+exports.load_ini = async function () {
     const plugin = this;
 
-    // The config loader automatically looks for 'data.blocklist.ini'
     plugin.cfg = plugin.config.get('redis.ini', 'ini');
 
     const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
-
-    // Also, you'll need a way to get the mongo URL. The cleanest way is an environment variable.
     const mongoUrl = process.env.MONGO_URI || 'mongodb://localhost:27017/freecustomemail';
-
-    const dbName = 'freecustomemail'; // You can hardcode this or get it from another config/env var
+    const dbName = 'freecustomemail';
 
     // --- Redis Connection ---
-    // Only create a new client if one doesn't already exist.
     if (!redisClient) {
         plugin.logdebug(`Connecting to Redis at ${redisUrl}`);
         redisClient = redis.createClient({ url: redisUrl });
-
-        redisClient.on('error', (err) => {
-            plugin.logerror(`Redis client error: ${err}`);
-        });
-        redisClient.on('connect', () => {
-            plugin.logdebug('Redis client is connecting...');
-        });
-        redisClient.on('ready', () => {
-            plugin.loginfo('Redis client is ready.');
-        });
-
-        // The 'await' here ensures that we don't proceed until the connection is attempted.
-        // Haraka's async startup handles this correctly.
-        redisClient.connect();
+        redisClient.on('error', (err) => plugin.logerror(`Redis client error: ${err}`));
+        redisClient.on('ready', () => plugin.loginfo('Redis client is ready.'));
+        // We don't await here, the client will connect in the background.
+        // The check_blocklist hook will check `isOpen`.
+        redisClient.connect().catch(err => plugin.logerror(`Redis initial connect failed: ${err}`));
     }
 
-    // --- MongoDB Connection ---
-    // Although not used in the `check_blocklist` hook, we initialize it
-    // here as per the plugin structure for potential future use.
+    // --- MongoDB Connection (now robust with async/await) ---
     if (!mongoClient) {
         plugin.logdebug(`Connecting to MongoDB at ${mongoUrl}`);
-        mongoClient = new MongoClient(mongoUrl);
-
-        mongoClient.connect().then(() => {
+        try {
+            mongoClient = new MongoClient(mongoUrl);
+            await mongoClient.connect();
             plugin.loginfo('MongoDB client connected successfully.');
             db = mongoClient.db(dbName);
-        }).catch(err => {
-            plugin.logerror(`MongoDB connection failed: ${err}`);
-        });
+        } catch (err) {
+            plugin.logerror(`FATAL: MongoDB connection failed on startup. Fallback check will not work. Error: ${err}`);
+            // We do not re-throw, to allow Haraka to start. The hook will handle db being null.
+        }
     }
 };
 
 /**
  * This function is called when Haraka is shutting down.
- * It's crucial to close database connections gracefully.
  */
 exports.shutdown = async function () {
     this.loginfo("Shutting down data.blocklist plugin");
@@ -94,57 +69,84 @@ exports.shutdown = async function () {
 };
 
 /**
- * The core logic of the plugin, executed for each email transaction.
+ * The core logic of the plugin, with added MongoDB fallback.
  */
 exports.check_blocklist = async function (next, connection) {
     const plugin = this;
     const transaction = connection.transaction;
 
-    // Ensure Redis is connected and ready before proceeding.
-    if (!redisClient?.isOpen) {
-        plugin.logerror("Redis is not connected. Skipping blocklist check.");
-        return next(); // Allow email to proceed
-    }
-
     const sender = transaction.mail_from.address().toLowerCase();
     const recipients = transaction.rcpt_to;
 
-    // An email can have multiple recipients. We must check each one.
     for (const recipient of recipients) {
         const recipientAddress = `${recipient.user}@${recipient.host}`.toLowerCase();
-
-        // --- CRITICAL STEP: Find the owner of the inbox ---
-        // This plugin assumes that your API maintains a Redis key that maps an
-        // inbox address to the unique ID of the user who owns it.
-        // For example: Key = "inboxmap:user@custom.com", Value = "the_users_wyiUserId"
-        const inboxOwnerId = await redisClient.get(`inboxmap:${recipientAddress}`);
-
-        // If this key doesn't exist, it's not an inbox managed by a logged-in user.
-        // We can safely skip it.
-        if (!inboxOwnerId) {
-            continue;
+        
+        // --- Find the owner of the inbox via Redis map ---
+        let inboxOwnerId;
+        if (redisClient?.isOpen) {
+            try {
+                inboxOwnerId = await redisClient.get(`inboxmap:${recipientAddress}`);
+            } catch (e) {
+                plugin.logerror(`Redis error getting inbox owner for ${recipientAddress}: ${e}`);
+                continue; // Skip to next recipient on error
+            }
+        } else {
+            plugin.logerror("Redis is not connected. Skipping all blocklist checks.");
+            return next(); // Allow all mail if Redis is down
         }
 
-        // The key for the user's personal mute list Set in Redis.
-        // This is consistent with what the API writes to.
+        if (!inboxOwnerId) {
+            continue; // Not a managed inbox, skip.
+        }
+
         const userMuteListKey = `mutelist:${inboxOwnerId}`;
 
+        // --- STAGE 1: Check Redis First (Fastest) ---
         try {
-            // sIsMember is an O(1) operation, making this check extremely fast.
-            const isMuted = await redisClient.sIsMember(userMuteListKey, sender);
+            const isMutedInRedis = await redisClient.sIsMember(userMuteListKey, sender);
 
-            if (isMuted) {
-                plugin.logwarn(`DENYING email from ${sender} to ${recipientAddress} (owner: ${inboxOwnerId}) as per user's mute list.`);
-                // DENY tells Haraka to reject this email with a 5xx error code.
+            if (isMutedInRedis) {
+                plugin.logwarn(`DENYING (Redis) email from ${sender} to ${recipientAddress} as per mute list.`);
                 return next(DENY, `The recipient has blocked your email address.`);
             }
         } catch (e) {
-            // If there's a Redis error during the check, log it but allow the email.
-            // It's better to let a spam email through than to block a legitimate one.
             plugin.logerror(`Redis error checking mute list for ${userMuteListKey}: ${e}`);
+            // Don't block email on Redis error, proceed to Mongo check or allow.
+        }
+        
+        // --- STAGE 2: Fallback to MongoDB (Slower, but authoritative) ---
+        plugin.logdebug(`Sender ${sender} not in Redis mute list for ${recipientAddress}. Checking MongoDB.`);
+
+        // Check if the MongoDB connection from load_ini was successful.
+        if (!db) {
+            plugin.logerror("MongoDB is not connected. Cannot perform fallback blocklist check.");
+            continue; // Skip to the next recipient.
+        }
+        
+        try {
+            // This query is highly efficient. It finds the user and checks if the sender
+            // exists in the 'mutedSenders' array in a single operation.
+            const isMutedInMongo = await db.collection('users').findOne({
+                wyiUserId: inboxOwnerId,
+                mutedSenders: sender
+            });
+            
+            // If the query returns a document, it means a match was found.
+            if (isMutedInMongo) {
+                plugin.logwarn(`DENYING (MongoDB) email from ${sender} to ${recipientAddress} as per mute list.`);
+                
+                // OPTIONAL: As a self-healing mechanism, you could add the sender back to the Redis cache here.
+                // redisClient.sAdd(userMuteListKey, sender).catch(err => plugin.logerror(`Failed to re-cache mute for ${sender}: ${err}`));
+                
+                return next(DENY, `The recipient has blocked your email address.`);
+            }
+
+        } catch (e) {
+            plugin.logerror(`MongoDB error checking mute list for user ${inboxOwnerId}: ${e}`);
+            // On DB error, fail-open (allow the email).
         }
     }
 
-    // If the loop completes without any blocks, allow the email to proceed.
+    // If we've looped through all recipients and found no reason to block, permit the email.
     next();
 };
