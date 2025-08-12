@@ -9,9 +9,37 @@ services:
       - ./nginx/conf.d:/etc/nginx/conf.d
       - certs:/etc/letsencrypt
       - ./certbot-webroot:/var/www/certbot
+    depends_on:
+      - api
     restart: unless-stopped
-    command: nginx -g 'daemon off;'
-
+    # ---- START: REPLACE THE COMMAND WITH THIS ----
+    command: >
+      /bin/sh -c "
+        echo 'Starting Nginx startup script...'
+        # Start with a temporary config that only serves HTTP for the challenge
+        cp /etc/nginx/conf.d/temp.conf /etc/nginx/conf.d/default.conf
+        
+        # Start Nginx in the background
+        nginx &
+        
+        # Wait for the certificate to be generated
+        echo 'Waiting for certificate...'
+        while [ ! -f /etc/letsencrypt/live/api2.freecustom.email/fullchain.pem ]; do
+          sleep 2;
+        done;
+        
+        echo 'Certificate found!'
+        
+        # Use the real, full configuration now
+        cp /etc/nginx/conf.d/default.conf.original /etc/nginx/conf.d/default.conf
+        
+        # Reload Nginx with the full config
+        nginx -s reload
+        
+        # Bring the background Nginx process to the foreground
+        wait %1
+      "
+    # ---- END: REPLACE THE COMMAND ----
 
   certbot:
     image: certbot/certbot
