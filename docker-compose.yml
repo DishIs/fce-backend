@@ -1,19 +1,43 @@
 services:
-  haraka:
-    build:
-      context: ./smtp-fast
-    container_name: maildrop-smtp
+  nginx:
+    image: nginx:1.22-alpine
+    container_name: maildrop-nginx
     ports:
-      - "25:25"
-      - "587:587"
-    environment:
-      REDIS_URL: redis://redis:6379
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
-      MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - certs:/etc/letsencrypt
+      - ./certbot-webroot:/var/www/certbot
     depends_on:
-      - redis
-      - mongo
+      - api
+    restart: unless-stopped
+
+  certbot:
+    image: certbot/certbot
+    container_name: certbot
+    volumes:
+      - certs:/etc/letsencrypt
+      - ./certbot-webroot:/var/www/certbot
+    entrypoint: /bin/sh -c
+    command: >
+      certbot certonly --webroot
+      --webroot-path=/var/www/certbot
+      --email you@example.com
+      --agree-tos --no-eff-email
+      --key-type ecdsa --elliptic-curve secp384r1
+      -d api2.freecustom.email
+      -d mail.freecustom.email
+  
+  certbot-renew:
+    image: certbot/certbot
+    volumes:
+      - certs:/etc/letsencrypt
+      - ./certbot-webroot:/var/www/certbot
+    entrypoint: sh -c "certbot renew --quiet && nginx -s reload && pkill -HUP haraka"
+    depends_on:
+      - nginx
+      - haraka
     restart: unless-stopped
 
   api:
@@ -27,6 +51,25 @@ services:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       JWT_SECRET: ${JWT_SECRET}
+    expose:
+      - "3000"
+    restart: unless-stopped
+
+  haraka:
+    build:
+      context: ./smtp-fast
+    container_name: maildrop-smtp
+    ports:
+      - "25:25"
+      - "587:587"
+    environment:
+      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
+    volumes:
+      - certs:/etc/letsencrypt:ro
+      - ./smtp-fast/src/config:/smtp-fast/src/config
     depends_on:
       - redis
       - mongo
@@ -53,6 +96,5 @@ services:
 
 volumes:
   maildrop_mongo_data:
-    name: maildrop_mongo_data
   maildrop_redis_data:
-    name: maildrop_redis_data
+  certs:
