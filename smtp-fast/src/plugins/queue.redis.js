@@ -177,7 +177,7 @@ exports.tiered_save = async function (next, connection) {
                     date: messageDate, html: parsed.html, text: parsed.text,
                     attachments: attachmentsForMongo, headers: parsed.headers,
                 };
-                await db.collection('saved_emails').insertOne(mongoRecord).catch(err => {
+                db.collection('saved_emails').insertOne(mongoRecord).catch(err => {
                     plugin.logerror(`MongoDB insertOne failed for ${destination}: ${err}`);
                 });
             }

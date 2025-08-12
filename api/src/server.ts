@@ -9,6 +9,7 @@ import dotenv from 'dotenv';
 import { connectToMongo } from './mongo';
 import { addDomainHandler, getDomainsHandler, getUserProfileHandler, muteSenderHandler, upsertUserHandler } from './user';
 import { deleteDomainHandler, getDashboardDataHandler, unmuteSenderHandler, verifyDomainHandler } from './domain-handler';
+import { addInboxHandler } from './inbox-handler';
 
 dotenv.config();
 
@@ -57,6 +58,7 @@ connectToMongo().then(() => {
   app.get('/user/:wyiUserId/domains', getDomainsHandler);
   app.post('/user/domains', addDomainHandler);
   app.post('/user/mute', muteSenderHandler);
+  app.post('/user/inboxes', addInboxHandler); // Add the new route here
 
   // --- WebSocket Logic ---
   

@@ -44,7 +44,7 @@ services:
     # --- ADD THIS SECTION ---
     # Map the redis_data volume to the directory where Redis stores its data
     volumes:
-      - redis_data:/data
+      - maildrop_redis_data:/data
 
   mongo:
     image: mongo:7
@@ -52,7 +52,7 @@ services:
     ports:
       - "27017:27017"
     volumes:
-      - mongo_data:/data/db
+      - maildrop_mongo_data:/data/db
     restart: unless-stopped
 
 # --- ADD THIS LINE ---
