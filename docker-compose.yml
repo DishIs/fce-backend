@@ -7,11 +7,10 @@ services:
       - "25:25"
       - "587:587"
     environment:
-      # These connection strings are correct because they use the service names
       REDIS_URL: redis://redis:6379
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      MONGO_URI: mongodb://your_secure_mongo_user:YOUR_VERY_STRONG_MONGO_PASSWORD@mongo:27017/freecustomemail?authSource=admin
+      MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
     depends_on:
       - redis
       - mongo
@@ -21,12 +20,13 @@ services:
     build:
       context: ./api
     container_name: maildrop-api
-    # No ports here - it's accessed via your main Nginx reverse proxy
     environment:
-      REDIS_HOST: redis://redis:6379
-      MONGO_URI: mongodb://your_secure_mongo_user:YOUR_VERY_STRONG_MONGO_PASSWORD@mongo:27017/freecustomemail?authSource=admin
-      INTERNAL_API_KEY: your_internal_api_key # Change these secrets
-      JWT_SECRET: your_jwt_secret             # Change these secrets
+      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      JWT_SECRET: ${JWT_SECRET}
     depends_on:
       - redis
       - mongo
@@ -35,7 +35,6 @@ services:
   redis:
     image: redis:7-alpine
     container_name: redis_server
-    # NO 'ports' SECTION. NOT PUBLIC.
     command: [ "redis-server", "--bind", "0.0.0.0", "--appendonly", "yes" ]
     restart: unless-stopped
     volumes:
@@ -44,14 +43,16 @@ services:
   mongo:
     image: mongo:7
     container_name: mongo_server
-    # NO 'ports' SECTION. NOT PUBLIC.
     environment:
-      MONGO_INITDB_ROOT_USERNAME: your_secure_mongo_user
-      MONGO_INITDB_ROOT_PASSWORD: YOUR_VERY_STRONG_MONGO_PASSWORD
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASS}
+      MONGO_INITDB_DATABASE: freecustomemail
     restart: unless-stopped
     volumes:
       - maildrop_mongo_data:/data/db
 
 volumes:
   maildrop_mongo_data:
+    name: maildrop_mongo_data
   maildrop_redis_data:
+    name: maildrop_redis_data
