@@ -12,46 +12,43 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
     const normalizedInbox = inboxName.toLowerCase();
 
     try {
-        // First, find the user to determine their plan
-        const user = await db.collection('users').findOne({ wyiUserId: wyiUserId });
+        // Fetch the user first
+        const user = await db.collection('users').findOne({ wyiUserId });
 
         if (!user) {
             return res.status(404).json({ success: false, message: "User not found." });
         }
 
-        let updateOperation;
+        let inboxes: string[] = Array.isArray(user.inboxes) ? [...user.inboxes] : [];
         let successMessage: string;
 
-        // Implement plan-based logic
         if (user.plan === 'pro') {
-            // For pro users, append the new inbox to the list if it doesn't already exist
-            updateOperation = { $addToSet: { inboxes: normalizedInbox } };
+            // Remove if already exists to avoid duplicates
+            inboxes = inboxes.filter(i => i !== normalizedInbox);
+            // Insert at beginning
+            inboxes.unshift(normalizedInbox);
             successMessage = "Inbox added successfully.";
         } else {
-            // For free users, replace the existing inbox list with the new one
-            updateOperation = { $set: { inboxes: [normalizedInbox] } };
+            // Free user only has one inbox — always overwrite
+            inboxes = [normalizedInbox];
             successMessage = "Inbox has been updated.";
         }
 
-        // Execute the determined update operation
+        // Update DB
         const result = await db.collection('users').updateOne(
-            { wyiUserId: wyiUserId }, // Find the user by their ID
-            updateOperation
+            { wyiUserId },
+            { $set: { inboxes } }
         );
 
         if (result.modifiedCount === 0) {
-            // This can happen if a pro user tries to add an existing inbox,
-            // or a free user sets the same inbox they already have.
-            // In either case, it's not an error.
-            if (user.plan === 'pro' && user.inboxes.includes(normalizedInbox)) {
-                 return res.status(200).json({ success: true, message: "Inbox was already associated with this account." });
+            if (user.plan === 'pro' && user.inboxes[0] === normalizedInbox) {
+                return res.status(200).json({ success: true, message: "Inbox was already at the top." });
             }
-             if (user.plan === 'free' && user.inboxes[0] === normalizedInbox) {
-                 return res.status(200).json({ success: true, message: "This is already your active inbox." });
+            if (user.plan === 'free' && user.inboxes[0] === normalizedInbox) {
+                return res.status(200).json({ success: true, message: "This is already your active inbox." });
             }
         }
-        
-        // If the update was successful (or no change was needed for a free user)
+
         return res.status(200).json({ success: true, message: successMessage });
 
     } catch (error) {
