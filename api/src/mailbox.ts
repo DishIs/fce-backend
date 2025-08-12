@@ -19,14 +19,10 @@ interface UserJwtPayload {
 // --- NEW: Helper to get plan from JWT or default to anonymous ---
 function getPlanFromRequest(req: any): 'pro' | 'free' | 'anonymous' {
     const authHeader = req.headers.authorization;
-    console.log('secret: ',JWT_SECRET)
-    console.log('header: ',req.headers, req, req.headers.authorization)
     if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.substring(7, authHeader.length);
-        console.log('Token: ',token)
         try {
             const decoded = jwt.verify(token, JWT_SECRET) as UserJwtPayload;
-            console.log('Decoded: ',decoded)
             return decoded.plan || 'anonymous';
         } catch (error: any) {
             console.warn("JWT verification failed:", error.message);
