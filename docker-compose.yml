@@ -59,4 +59,6 @@ services:
 # Declare the new named volume
 volumes:
   mongo_data:
+    name: maildrop_mongo_data
   redis_data:
+    name: maildrop_redis_data
