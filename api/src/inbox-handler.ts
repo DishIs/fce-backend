@@ -10,17 +10,8 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
         return res.status(400).json({ success: false, message: "User ID and inbox name are required." });
     }
 
-    // Basic validation for the inbox name
-    if (!/^[a-zA-Z0-9._%+-]+@ditmail\.online$/.test(inboxName.toLowerCase())) {
-        return res.status(400).json({ success: false, message: "Invalid inbox name format for the domain." });
-    }
-    
+
     try {
-        // First, check if this inbox is already claimed by another user
-        const existingInboxUser = await db.collection('users').findOne({ inboxes: inboxName.toLowerCase() });
-        if (existingInboxUser && existingInboxUser.wyiUserId !== wyiUserId) {
-            return res.status(409).json({ success: false, message: "This inbox name is already in use." });
-        }
 
         // Use $addToSet to add the inbox to the user's array.
         // This is safe and prevents duplicates.

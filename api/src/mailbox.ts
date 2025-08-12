@@ -1,77 +1,85 @@
-// /home/dit/maildrop/api/src/mailbox.ts
 import { client } from "./redis";
 import bigInt from "big-integer";
 import ratelimit from "./ratelimit";
-import { gfs } from './mongo'; // Assuming gfs is correctly initialized GridFSBucket
+import { gfs } from './mongo';
 import { Readable } from 'stream';
 import { ObjectId } from 'mongodb';
+import * as jwt from 'jsonwebtoken'; // Use a proper JWT library
 
 const ALTINBOX_MOD: number = parseInt(process.env.ALTINBOX_MOD || "20190422");
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key'; // IMPORTANT: Use a secure, environment-specific secret
 
-// --- REFACTORED: Data Access Functions ---
+interface UserJwtPayload {
+    id: string;
+    plan: 'pro' | 'free';
+    iat: number;
+    exp: number;
+}
+
+// --- NEW: Helper to get plan from JWT or default to anonymous ---
+function getPlanFromRequest(req: any): 'pro' | 'free' | 'anonymous' {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7, authHeader.length);
+        try {
+            const decoded = jwt.verify(token, JWT_SECRET) as UserJwtPayload;
+            return decoded.plan || 'anonymous';
+        } catch (error: any) {
+            console.warn("JWT verification failed:", error.message);
+            return 'anonymous';
+        }
+    }
+    return 'anonymous';
+}
+
 
 /**
- * Gets a list of message summaries for a mailbox, newest first.
- * Retrieves message IDs from the Sorted Set and fetches corresponding data from the Hash.
+ * Gets a list of message summaries for a mailbox, based on the user's plan.
  */
-export async function getInbox(mailbox: string): Promise<Array<object>> {
-    console.log(`getting mailbox summaries for ${mailbox}`);
-    const indexKey = `mailbox:${mailbox}:index`;
-    const dataKey = `mailbox:${mailbox}:data`;
+export async function getInbox(mailbox: string, plan: 'pro' | 'free' | 'anonymous'): Promise<Array<object>> {
+    console.log(`getting mailbox summaries for ${mailbox} on plan ${plan}`);
+    const indexKey = `maildrop:${plan}:${mailbox}:index`;
+    const dataKey = `maildrop:${plan}:${mailbox}:data`;
 
     try {
-        // --- FIX APPLIED HERE ---
-        // Instead of the incorrectly typed zRevRange, use zRange with the REV option.
-        // This achieves the same result (getting newest first) and is fully type-supported.
         const messageIds = await client.zRange(indexKey, 0, -1, { REV: true });
 
         if (!messageIds || messageIds.length === 0) {
-            console.log(`No messages found in mailbox: ${mailbox}`);
             return [];
         }
 
-        // Fetch all message bodies in one go using HMGET
         const results = await client.hmGet(dataKey, messageIds);
 
-        // Filter out null results and parse the JSON.
         return results
-            .filter(r => r) // Ensure result is not null
+            .filter(r => r)
             .map((result: string) => {
                 const message = JSON.parse(result);
-                // Construct the summary object
                 return {
-                    id: message.id,
-                    from: message.from,
-                    to: message.to,
-                    subject: message.subject,
-                    date: message.date,
-                    hasAttachment: message.hasAttachment,
+                    id: message.id, from: message.from, to: message.to,
+                    subject: message.subject, date: message.date, hasAttachment: message.hasAttachment,
                 };
             });
-
     } catch (error) {
-        console.error(`Error during Redis operations for getInbox on ${mailbox}:`, error);
+        console.error(`Error in getInbox on ${mailbox} (${plan}):`, error);
         throw new Error('Failed to retrieve messages from Redis');
     }
 }
 
 /**
- * Gets a single, complete message object by its ID.
- * Uses a direct HGET for maximum efficiency.
+ * Gets a single, complete message object by its ID, based on the user's plan.
  */
-export async function getMessage(mailbox: string, id: string): Promise<any> {
-    console.log(`getting message ${id} from mailbox ${mailbox}`);
-    const dataKey = `mailbox:${mailbox}:data`;
+export async function getMessage(mailbox: string, id: string, plan: 'pro' | 'free' | 'anonymous'): Promise<any> {
+    console.log(`getting message ${id} from mailbox ${mailbox} on plan ${plan}`);
+    const dataKey = `maildrop:${plan}:${mailbox}:data`;
 
     try {
         const messageStr = await client.hGet(dataKey, id);
         if (!messageStr) {
-            return null; // Return null to indicate not found
+            return null;
         }
         
         let message = JSON.parse(messageStr);
 
-        // If attachments are stored in GridFS, retrieve them
         if (message.attachments && message.attachments.length > 0) {
             for (const att of message.attachments) {
                 if (att.gridfs_id) {
@@ -87,18 +95,18 @@ export async function getMessage(mailbox: string, id: string): Promise<any> {
         }
         return message;
     } catch (error) {
-        console.error(`Error during Redis hGet for message ${id}:`, error);
+        console.error(`Error getting message ${id} (${plan}):`, error);
         throw new Error('Failed to retrieve message from Redis');
     }
 }
 
 /**
- * Deletes a message by its ID from both the index and data stores.
+ * Deletes a message by its ID, based on the user's plan.
  */
-export async function deleteMessageById(mailbox: string, id: string): Promise<boolean> {
-    console.log(`deleting message ${id} from mailbox ${mailbox}`);
-    const indexKey = `mailbox:${mailbox}:index`;
-    const dataKey = `mailbox:${mailbox}:data`;
+export async function deleteMessageById(mailbox: string, id: string, plan: 'pro' | 'free' | 'anonymous'): Promise<boolean> {
+    console.log(`deleting message ${id} from mailbox ${mailbox} on plan ${plan}`);
+    const indexKey = `maildrop:${plan}:${mailbox}:index`;
+    const dataKey = `maildrop:${plan}:${mailbox}:data`;
 
     try {
         const [, hdelResult] = await client.multi()
@@ -108,27 +116,27 @@ export async function deleteMessageById(mailbox: string, id: string): Promise<bo
         
         return Number(hdelResult) > 0;
     } catch (error) {
-        console.error(`Error during Redis multi-delete for message ${id}:`, error);
+        console.error(`Error deleting message ${id} (${plan}):`, error);
         return false;
     }
 }
 
-// (The encryptMailbox function remains unchanged)
 export function encryptMailbox(mailbox: string): string {
   const num = bigInt(mailbox.toLowerCase().replace(/[^0-9a-z]/gi, ''), 36);
   const encryptedNum = bigInt(`1${num.toString().split("").reverse().join("")}`).add(ALTINBOX_MOD);
   return `D-${encryptedNum.toString(36)}`;
 }
 
-
-// --- REFACTORED: API Handlers (No changes needed here) ---
+// --- UPDATED API Handlers with JWT ---
 
 export async function listHandler(req: any, res: any): Promise<any> {
     const ip = req.ip;
-    const mailbox = req.params.name;  
+    const mailbox = req.params.name;
+    const plan = getPlanFromRequest(req); // Get plan from JWT
+
     try {
         await ratelimit(ip);
-        const results = await getInbox(mailbox);
+        const results = await getInbox(mailbox, plan); // Pass plan to data function
         return res.status(200).set({
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Credentials': 'true',
@@ -144,8 +152,7 @@ export async function listHandler(req: any, res: any): Promise<any> {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Credentials': 'true',
         }).json({
-            success: false,
-            message: "An error occurred.",
+            success: false, message: "An error occurred.",
             errorDetails: reason.toString(),
         });
     }
@@ -154,19 +161,16 @@ export async function listHandler(req: any, res: any): Promise<any> {
 export async function messageHandler(req: any, res: any): Promise<any> {
     const ip = req.ip;
     const mailbox = req.params.name;
-    const id = req.params.id;  
+    const id = req.params.id;
+    const plan = getPlanFromRequest(req); // Get plan from JWT
+
     try {
         await ratelimit(ip);
-        const messageData = await getMessage(mailbox, id);
+        const messageData = await getMessage(mailbox, id, plan); // Pass plan
 
         if (!messageData) {
-            return res.status(200).set({
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Credentials': 'true',
-            }).json({
-                success: false,
-                message: "Message not found.",
-                details: { mailbox: encryptMailbox(mailbox), id },
+            return res.status(200).json({
+                success: false, message: "Message not found in your current plan.",
             });
         }
         
@@ -174,19 +178,13 @@ export async function messageHandler(req: any, res: any): Promise<any> {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Credentials': 'true',
         }).json({
-            success: true,
-            message: "Message retrieved successfully.",
+            success: true, message: "Message retrieved successfully.",
             data: messageData,
-            encryptedMailbox: encryptMailbox(mailbox),
         });
     } catch (reason: any) {
         console.log(`error for ${ip} : ${reason}`);
-        return res.status(500).set({
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Credentials': 'true',
-        }).json({
-            success: false,
-            message: "An error occurred while retrieving the message.",
+        return res.status(500).json({
+            success: false, message: "An error occurred while retrieving the message.",
             errorDetails: reason.toString(),
         });
     }
@@ -195,19 +193,16 @@ export async function messageHandler(req: any, res: any): Promise<any> {
 export async function deleteHandler(req: any, res: any): Promise<any> {
     const ip = req.ip;
     const mailbox = req.params.name;
-    const id = req.params.id;  
+    const id = req.params.id;
+    const plan = getPlanFromRequest(req); // Get plan from JWT
+    
     try {
         await ratelimit(ip);
-        const deleted = await deleteMessageById(mailbox, id);
+        const deleted = await deleteMessageById(mailbox, id, plan); // Pass plan
 
         if (!deleted) {
-            return res.status(200).set({
-                'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Credentials': 'true',
-            }).json({
-                success: false,
-                message: "Message not found or already deleted.",
-                details: { mailbox: encryptMailbox(mailbox), id },
+            return res.status(200).json({
+                success: false, message: "Message not found or already deleted.",
             });
         }
 
@@ -215,20 +210,13 @@ export async function deleteHandler(req: any, res: any): Promise<any> {
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Credentials': 'true',
         }).json({
-            success: true,
-            message: "Message deleted successfully.",
-            mailbox: encryptMailbox(mailbox),
+            success: true, message: "Message deleted successfully.",
         });
     } catch (reason: any) {
         console.log(`error for ${ip} : ${reason}`);
-        return res.status(500).set({
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Credentials': 'true',
-        }).json({
-            success: false,
-            message: "Failed to delete message.",
+        return res.status(500).json({
+            success: false, message: "Failed to delete message.",
             errorDetails: reason.toString(),
-            mailbox: encryptMailbox(mailbox),
         });
     }
 }

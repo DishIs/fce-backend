@@ -27,6 +27,7 @@ services:
       REDIS_HOST: redis://redis:6379
       MONGO_URI: mongodb://mongo:27017/freecustomemail
       INTERNAL_API_KEY: your_internal_api_key
+      JWT_SECRET: your_jwt_secret
     depends_on:
       - redis
       - mongo

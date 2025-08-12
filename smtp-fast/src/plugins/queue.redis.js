@@ -6,6 +6,7 @@ const { simpleParser } = require('mailparser');
 const { createClient } = require('redis');
 const { MongoClient, GridFSBucket, ObjectId } = require('mongodb');
 const { Readable } = require('stream');
+const jwt = require('jsonwebtoken'); // Assuming JWT library is available
 
 let redisClient;
 let mongoClient;
@@ -53,29 +54,68 @@ exports.shutdown = function () {
     if (mongoClient) mongoClient.close();
 };
 
-async function getUserData(recipientUser) {
-    if (!db || !redisClient.isOpen) return { plan: 'anonymous', userId: null };
+async function getUserData(recipientEmail) {
+    if (!db || !redisClient.isOpen) return { plan: 'anonymous', userId: null, isVerified: false };
     try {
-        const userDataCacheKey = `user_data_cache:${recipientUser}`;
-        const cachedUserData = await redisClient.get(userDataCacheKey);
-        if (cachedUserData) {
-            const data = JSON.parse(cachedUserData);
+        const cacheKey = `user_data_cache:${recipientEmail}`;
+        const cachedData = await redisClient.get(cacheKey);
+        if (cachedData) {
+            const data = JSON.parse(cachedData);
             data.userId = data.userId ? new ObjectId(data.userId) : null;
             return data;
         }
-        const user = await db.collection('users').findOne({ inboxes: recipientUser });
-        const userData = {
-            plan: user ? user.plan : 'anonymous',
-            userId: user ? user._id : null,
-        };
+
+        const recipientDomain = recipientEmail.split('@')[1];
         const ttl = parseInt(plugin.cfg.main.plan_cache_ttl, 10) || 3600;
-        await redisClient.set(userDataCacheKey, JSON.stringify(userData), { EX: ttl });
+        let user;
+        let userData;
+
+        // 1. Prioritize pro users with a verified custom domain.
+        // This query finds a user where the `customDomains` array contains an element
+        // that matches both the domain and the verified status.
+        user = await db.collection('users').findOne({
+            plan: 'pro',
+            'customDomains.domain': recipientDomain,
+            'customDomains.verified': true
+        });
+
+        if (user) {
+            userData = { plan: 'pro', userId: user._id, isVerified: true };
+            await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
+            userData.userId = new ObjectId(userData.userId);
+            return userData;
+        }
+
+        // 2. Find a Pro user with this specific inbox address.
+        user = await db.collection('users').findOne({ plan: 'pro', inboxes: recipientEmail });
+        if (user) {
+            userData = { plan: 'pro', userId: user._id, isVerified: false };
+            await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
+            userData.userId = new ObjectId(userData.userId);
+            return userData;
+        }
+
+        // 3. Find a Free user with this specific inbox address.
+        user = await db.collection('users').findOne({ plan: 'free', inboxes: recipientEmail });
+        if (user) {
+            userData = { plan: 'free', userId: user._id, isVerified: false };
+            await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
+            userData.userId = new ObjectId(userData.userId);
+            return userData;
+        }
+
+        // 4. Default to anonymous if no user is found.
+        userData = { plan: 'anonymous', userId: null, isVerified: false };
+        // Cache the anonymous result to prevent repeated DB lookups for non-existent users.
+        await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
         return userData;
+
     } catch (err) {
-        plugin.logerror(`Error fetching user data for ${recipientUser}: ${err}`);
-        return { plan: 'anonymous', userId: null };
+        plugin.logerror(`Error fetching user data for ${recipientEmail}: ${err}`);
+        return { plan: 'anonymous', userId: null, isVerified: false };
     }
 }
+
 
 exports.tiered_save = async function (next, connection) {
     if (!db || !gfs || !redisClient.isOpen) {
@@ -90,9 +130,9 @@ exports.tiered_save = async function (next, connection) {
 
         for (const recipient of connection.transaction.rcpt_to) {
             const destination = `${recipient.user}@${recipient.host}`.toLowerCase();
-            const { plan, userId } = await getUserData(destination);
+            const { plan, userId, isVerified } = await getUserData(destination);
 
-            plugin.logdebug(`Processing email for ${destination} with plan: ${plan}`);
+            plugin.logdebug(`Processing email for ${destination} with plan: ${plan} (Verified: ${isVerified})`);
 
             let cfg;
             if (plan === 'pro') {
@@ -109,7 +149,7 @@ exports.tiered_save = async function (next, connection) {
                     attachment_limit: parseInt(plugin.cfg.main.free_attachment_limit_mb, 10) * 1024 * 1024,
                     save_to_mongo: false,
                 };
-            } else {
+            } else { // anonymous
                 cfg = {
                     mailbox_size: parseInt(plugin.cfg.main.anon_mailbox_size, 10),
                     mailbox_ttl: parseInt(plugin.cfg.main.anon_mailbox_ttl, 10),
@@ -136,9 +176,9 @@ exports.tiered_save = async function (next, connection) {
 
                     attachmentsForRedis.push({
                         filename: att.filename, contentType: att.contentType, size: att.size,
-                        gridfs_id: uploadStream.id.toString(), // Store GridFS ID as string
+                        gridfs_id: uploadStream.id.toString(),
                     });
-                    attachmentsForMongo.push({ // This is for the permanent backup
+                    attachmentsForMongo.push({
                         gridfs_id: uploadStream.id,
                         filename: att.filename, contentType: att.contentType, size: att.size
                     });
@@ -150,7 +190,7 @@ exports.tiered_save = async function (next, connection) {
                 }
             }
             if (attachmentsRemoved) {
-                const notice = "<br><p><i>[One or more attachments were removed. Your plan may have a size limit, or you may need to log in.]</i></p>";
+                const notice = "<br><p><i>[One or more attachments were removed due to size limits for your plan.]</i></p>";
                 parsed.html = parsed.html ? parsed.html + notice : parsed.textAsHtml + notice;
             }
 
@@ -181,46 +221,43 @@ exports.tiered_save = async function (next, connection) {
                     plugin.logerror(`MongoDB insertOne failed for ${destination}: ${err}`);
                 });
             }
-
-            // --- REFACTORED: Efficiently Trim and Save ---
-            const indexKey = `mailbox:${destination}:index`; // Sorted Set of message IDs
-            const dataKey = `mailbox:${destination}:data`;   // Hash of message bodies
+            
+            // --- NEW: Plan-based Redis keys ---
+            const indexKey = `maildrop:${plan}:${destination}:index`;
+            const dataKey = `maildrop:${plan}:${destination}:data`;
 
             const currentSize = await redisClient.zCard(indexKey);
             const multi = redisClient.multi();
 
             if (currentSize >= cfg.mailbox_size) {
-                // Find the oldest message IDs to remove
                 const numToRemove = (currentSize - cfg.mailbox_size) + 1;
                 const oldIds = await redisClient.zRange(indexKey, 0, numToRemove - 1);
                 if (oldIds && oldIds.length > 0) {
-                    plugin.logdebug(`Trimming ${oldIds.length} old messages from ${destination}`);
-                    multi.zRem(indexKey, oldIds); // Remove from sorted set
-                    multi.hDel(dataKey, oldIds);  // Remove from hash
+                    plugin.logdebug(`Trimming ${oldIds.length} old messages from ${destination} (${plan})`);
+                    multi.zRem(indexKey, oldIds);
+                    multi.hDel(dataKey, oldIds);
                 }
             }
             
-            // Add the new message
             multi.zAdd(indexKey, { score: messageTimestamp, value: messageId });
             multi.hSet(dataKey, messageId, JSON.stringify(fullMessage));
 
-            // Set TTL on the keys for non-pro users
             if (cfg.mailbox_ttl) {
                 multi.expire(indexKey, cfg.mailbox_ttl);
                 multi.expire(dataKey, cfg.mailbox_ttl);
             }
 
-            // Publish event for real-time updates
             multi.publish(`mailbox:events:${destination}`, JSON.stringify({
                 type: 'new_mail',
                 mailbox: destination,
+                plan: plan, // Announce the plan for potential client-side logic
                 id: fullMessage.id, from: fullMessage.from, to: fullMessage.to,
                 subject: fullMessage.subject, date: fullMessage.date,
                 hasAttachment: fullMessage.hasAttachment
             }));
 
             await multi.exec();
-            plugin.loginfo(`Successfully queued message ${messageId} for ${destination} using new model`);
+            plugin.loginfo(`Successfully queued message ${messageId} for ${destination} to plan '${plan}'`);
         }
         next(OK);
     } catch (err) {
