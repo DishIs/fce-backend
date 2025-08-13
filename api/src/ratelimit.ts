@@ -3,12 +3,19 @@
 import { client } from "./redis";
 
 const RATELIMIT: number = parseInt(process.env.RATELIMIT || "10");
-const LOCALHOSTS = ["127.0.0.1", "::1", "::ffff:127.0.0.1", '172.18.0.4'];
+const LOCALHOSTS = ["127.0.0.1", "::1", "::ffff:127.0.0.1"];
+
+// Matches any Docker bridge IP in the 172.16.0.0 – 172.31.255.255 range
+function isDockerIP(ip: string): boolean {
+  // Remove IPv6 prefix if present
+  const cleanIP = ip.replace(/^::ffff:/, "");
+  return /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(cleanIP);
+}
 
 export default async function ratelimit(ip: string): Promise<void> {
   return new Promise<void>(async (resolve, reject) => {
-    // Skip rate limiting for localhost/internal calls
-    if (LOCALHOSTS.includes(ip)) {
+    // Skip rate limiting for localhost or Docker internal calls
+    if (LOCALHOSTS.includes(ip) || isDockerIP(ip)) {
       console.log(`[ratelimit] Bypassed for ${ip}`);
       return resolve();
     }
@@ -24,7 +31,7 @@ export default async function ratelimit(ip: string): Promise<void> {
         if (tokens < 0) {
           const ttl = await client.ttl(key);
           if (ttl === -1) {
-            await client.expire(key, 1); // Ensure key expires even if race condition
+            await client.expire(key, 1);
           }
           console.warn(`[ratelimit] ${ip} is rate limited.`);
           return reject("rate limited");
@@ -37,7 +44,6 @@ export default async function ratelimit(ip: string): Promise<void> {
           console.log(`[ratelimit] ${ip} allowed. Tokens left: ${tokens}`);
           return resolve();
         }
-
       } else {
         // First request in the window
         await client.hSet(key, "tokens", (RATELIMIT - 1).toString());
