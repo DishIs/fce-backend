@@ -4,10 +4,10 @@ import ratelimit from "./ratelimit";
 import { gfs } from './mongo';
 import { Readable } from 'stream';
 import { ObjectId } from 'mongodb';
-import * as jwt from 'jsonwebtoken'; // Use a proper JWT library
+import * as jwt from 'jsonwebtoken';
 
 const ALTINBOX_MOD: number = parseInt(process.env.ALTINBOX_MOD || "20190422");
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key'; // IMPORTANT: Use a secure, environment-specific secret
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key';
 
 interface UserJwtPayload {
     id: string;
@@ -16,7 +16,6 @@ interface UserJwtPayload {
     exp: number;
 }
 
-// --- NEW: Helper to get plan from JWT or default to anonymous ---
 function getPlanFromRequest(req: any): 'pro' | 'free' | 'anonymous' {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -31,7 +30,6 @@ function getPlanFromRequest(req: any): 'pro' | 'free' | 'anonymous' {
     }
     return 'anonymous';
 }
-
 
 /**
  * Gets a list of message summaries for a mailbox, based on the user's plan.
@@ -50,6 +48,7 @@ export async function getInbox(mailbox: string, plan: 'pro' | 'free' | 'anonymou
 
         const results = await client.hmGet(dataKey, messageIds);
 
+        // --- REVISED: The mapping function now includes 'wasAttachmentStripped' ---
         return results
             .filter(r => r)
             .map((result: string) => {
@@ -57,6 +56,7 @@ export async function getInbox(mailbox: string, plan: 'pro' | 'free' | 'anonymou
                 return {
                     id: message.id, from: message.from, to: message.to,
                     subject: message.subject, date: message.date, hasAttachment: message.hasAttachment,
+                    wasAttachmentStripped: !!message.wasAttachmentStripped, // <-- Add the flag here, ensuring it's a boolean
                 };
             });
     } catch (error) {
@@ -127,16 +127,14 @@ export function encryptMailbox(mailbox: string): string {
   return `D-${encryptedNum.toString(36)}`;
 }
 
-// --- UPDATED API Handlers with JWT ---
-
 export async function listHandler(req: any, res: any): Promise<any> {
     const ip = req.ip;
     const mailbox = req.params.name;
-    const plan = getPlanFromRequest(req); // Get plan from JWT
+    const plan = getPlanFromRequest(req);
 
     try {
         await ratelimit(ip);
-        const results = await getInbox(mailbox, plan); // Pass plan to data function
+        const results = await getInbox(mailbox, plan);
         return res.status(200).set({
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Credentials': 'true',
@@ -162,11 +160,11 @@ export async function messageHandler(req: any, res: any): Promise<any> {
     const ip = req.ip;
     const mailbox = req.params.name;
     const id = req.params.id;
-    const plan = getPlanFromRequest(req); // Get plan from JWT
+    const plan = getPlanFromRequest(req);
 
     try {
         await ratelimit(ip);
-        const messageData = await getMessage(mailbox, id, plan); // Pass plan
+        const messageData = await getMessage(mailbox, id, plan);
 
         if (!messageData) {
             return res.status(200).json({
@@ -194,11 +192,11 @@ export async function deleteHandler(req: any, res: any): Promise<any> {
     const ip = req.ip;
     const mailbox = req.params.name;
     const id = req.params.id;
-    const plan = getPlanFromRequest(req); // Get plan from JWT
+    const plan = getPlanFromRequest(req);
     
     try {
         await ratelimit(ip);
-        const deleted = await deleteMessageById(mailbox, id, plan); // Pass plan
+        const deleted = await deleteMessageById(mailbox, id, plan);
 
         if (!deleted) {
             return res.status(200).json({

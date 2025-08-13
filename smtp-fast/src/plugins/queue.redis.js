@@ -70,8 +70,6 @@ async function getUserData(recipientEmail) {
         let userData;
 
         // 1. Prioritize pro users with a verified custom domain.
-        // This query finds a user where the `customDomains` array contains an element
-        // that matches both the domain and the verified status.
         user = await db.collection('users').findOne({
             plan: 'pro',
             'customDomains.domain': recipientDomain,
@@ -105,7 +103,6 @@ async function getUserData(recipientEmail) {
 
         // 4. Default to anonymous if no user is found.
         userData = { plan: 'anonymous', userId: null, isVerified: false };
-        // Cache the anonymous result to prevent repeated DB lookups for non-existent users.
         await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
         return userData;
 
@@ -159,11 +156,11 @@ exports.tiered_save = async function (next, connection) {
 
             const attachmentsForRedis = [];
             const attachmentsForMongo = [];
-            let attachmentsRemoved = false;
+            let attachmentsRemoved = false; // <-- This is the flag we'll use
 
             for (const att of (parsed.attachments || [])) {
                 if (att.size > cfg.attachment_limit) {
-                    attachmentsRemoved = true;
+                    attachmentsRemoved = true; // Set the flag if an attachment is too large
                     continue;
                 }
                 if (plan === 'pro' && userId) {
@@ -197,6 +194,7 @@ exports.tiered_save = async function (next, connection) {
             const messageDate = new Date();
             const messageTimestamp = messageDate.getTime();
 
+            // --- REVISED: Added 'wasAttachmentStripped' to the message object ---
             const fullMessage = {
                 id: messageId,
                 from: parsed.from?.text || 'unknown',
@@ -204,6 +202,7 @@ exports.tiered_save = async function (next, connection) {
                 subject: parsed.subject || '(no subject)',
                 date: format(messageDate, "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"),
                 hasAttachment: attachmentsForRedis.length > 0,
+                wasAttachmentStripped: attachmentsRemoved, // <-- Add the flag here
                 html: parsed.html || parsed.textAsHtml,
                 text: parsed.text,
                 attachments: attachmentsForRedis,
@@ -221,7 +220,6 @@ exports.tiered_save = async function (next, connection) {
                 });
             }
             
-            // --- NEW: Plan-based Redis keys ---
             const indexKey = `maildrop:${plan}:${destination}:index`;
             const dataKey = `maildrop:${plan}:${destination}:data`;
 
@@ -249,7 +247,7 @@ exports.tiered_save = async function (next, connection) {
             multi.publish(`mailbox:events:${destination}`, JSON.stringify({
                 type: 'new_mail',
                 mailbox: destination,
-                plan: plan, // Announce the plan for potential client-side logic
+                plan: plan,
                 id: fullMessage.id, from: fullMessage.from, to: fullMessage.to,
                 subject: fullMessage.subject, date: fullMessage.date,
                 hasAttachment: fullMessage.hasAttachment
