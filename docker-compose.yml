@@ -12,15 +12,15 @@ services:
     depends_on:
       - api
     restart: unless-stopped
-    # ---- START: NEW STABLE COMMAND ----
+    # ---- START: FINAL STABLE COMMAND ----
     command: >
       /bin/sh -c "
+        # This script runs ONCE when the container starts up.
+        # It prepares the correct config and then hands off control to Nginx permanently.
+        
         echo 'Preparing Nginx...'
         
-        # This logic runs ONCE when the container starts.
-        # It decides which config to use and then starts Nginx in the foreground.
-        
-        # If the final certificate exists, use the full HTTPS config.
+        # If the final certificate already exists, use the full HTTPS config.
         if [ -f /etc/letsencrypt/live/api2.freecustom.email/fullchain.pem ]; then
           echo 'Certificate found. Using production HTTPS config.'
           # Ensure temp.conf is removed and the real one is named default.conf
@@ -29,15 +29,15 @@ services:
         
         # Otherwise, use the temporary HTTP config for the cert challenge.
         else
-          echo 'Certificate not found. Using temporary HTTP config.'
+          echo 'Certificate not found. Using temporary HTTP config for cert challenge.'
           cp /etc/nginx/conf.d/temp.conf /etc/nginx/conf.d/default.conf
         fi
         
         echo 'Starting Nginx...'
-        # This is the standard, stable way to run Nginx. It takes over the container.
+        # This command starts Nginx in the foreground and keeps the container alive.
         nginx -g 'daemon off;'
       "
-    # ---- END: NEW STABLE COMMAND ----
+    # ---- END: FINAL STABLE COMMAND ----
 
   certbot:
     image: certbot/certbot
@@ -45,20 +45,21 @@ services:
     volumes:
       - certs:/etc/letsencrypt
       - ./certbot-webroot:/var/www/certbot
-      - ./smtp-fast/src/config:/haraka-config # Add this line
+      - ./smtp-fast/src/config:/haraka-config
     entrypoint: /bin/sh -c
-    # Modified command to copy certs after creation
+    # ---- UPDATED COMMAND WITH NEW DOMAIN ----
     command: >
       "certbot certonly --webroot
       --webroot-path=/var/www/certbot
-      --email dishantsinghdev@gmail.com
+      --email you@example.com
       --agree-tos --no-eff-email
       --key-type ecdsa --elliptic-curve secp384r1
       -d api2.freecustom.email
-      -d mail.freecustom.email &&
+      -d mx.freecustom.email &&
       echo 'Copying initial certs to Haraka config...' &&
       cp /etc/letsencrypt/live/api2.freecustom.email/privkey.pem /haraka-config/tls_key.pem &&
       cp /etc/letsencrypt/live/api2.freecustom.email/fullchain.pem /haraka-config/tls_cert.pem"
+
 
   certbot-renew:
     image: certbot/certbot
