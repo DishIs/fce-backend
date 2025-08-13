@@ -3,7 +3,7 @@
 import { client } from "./redis";
 
 const RATELIMIT: number = parseInt(process.env.RATELIMIT || "10");
-const LOCALHOSTS = ["127.0.0.1", "::1", "::ffff:127.0.0.1"];
+const LOCALHOSTS = ["127.0.0.1", "::1", "::ffff:127.0.0.1", '172.18.0.4'];
 
 export default async function ratelimit(ip: string): Promise<void> {
   return new Promise<void>(async (resolve, reject) => {
