@@ -98,6 +98,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: redis_server
+    ports:
+      - "6379:6379"
     command: [
       "redis-server",
       "--bind", "0.0.0.0",
