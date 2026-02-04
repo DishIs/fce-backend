@@ -167,6 +167,7 @@ export async function upsertUserHandler(req: Request, res: Response) {
             $setOnInsert: {
                 createdAt: new Date(),
                 inboxes: [],
+                inboxHistory: [], // ALL inboxes ever used by this user
                 customDomains: [],
                 mutedSenders: [],
             }

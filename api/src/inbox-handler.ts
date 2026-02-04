@@ -48,19 +48,19 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
             );
         }
 
-        // --- Redis cache handling ---
+        // --- FIXED: Redis cache handling ---
         if (client.isOpen) {
             const ttl = parseInt(process.env.PLAN_CACHE_TTL || "3600", 10);
 
-            // 1. Delete all old cache keys for previous inboxes
-            if (Array.isArray(user.inboxes) && user.inboxes.length > 0) {
-                const oldKeys = user.inboxes.map(i => `user_data_cache:${i.toLowerCase()}`);
-                if (oldKeys.length > 0) {
-                    await client.del(oldKeys);
-                }
-            }
-
-            // 2. Set new cache entry for the current inbox
+            // FIX: For FREE users, we DON'T delete old caches anymore
+            // This prevents emails from being saved to the wrong plan namespace
+            // when users switch between inboxes
+            
+            // OPTION 1 (Recommended): Keep cache for the current inbox only
+            // This works because getUserData will fall back to MongoDB and find the user
+            // as long as the inbox is in their inboxes array
+            
+            // Set cache entry for the current inbox
             const cacheKey = `user_data_cache:${normalizedInbox}`;
             const userData = {
                 plan: user.plan,
@@ -68,6 +68,16 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
                 isVerified: false
             };
             await client.set(cacheKey, JSON.stringify(userData), { EX: ttl });
+
+            // CRITICAL: For free users, keep cache alive for ALL their inboxes
+            // even though they only have one "active" inbox in the UI
+            // This ensures incoming emails always use the correct plan
+            if (user.plan === 'free' && Array.isArray(user.inboxes)) {
+                for (const inbox of user.inboxes) {
+                    const inboxCacheKey = `user_data_cache:${inbox.toLowerCase()}`;
+                    await client.set(inboxCacheKey, JSON.stringify(userData), { EX: ttl });
+                }
+            }
         }
 
         return res.status(200).json({ success: true, message: successMessage });

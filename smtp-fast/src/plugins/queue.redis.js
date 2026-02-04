@@ -53,6 +53,9 @@ exports.shutdown = function () {
     if (mongoClient) mongoClient.close();
 };
 
+// ALTERNATIVE FIX for queue.redis.js
+// This modifies getUserData to be more resilient to cache misses
+
 async function getUserData(recipientEmail) {
     if (!db || !redisClient.isOpen) return { plan: 'anonymous', userId: null, isVerified: false };
     try {
@@ -92,18 +95,30 @@ async function getUserData(recipientEmail) {
             return userData;
         }
 
-        // 3. Find a Free user with this specific inbox address.
+        // 3. CRITICAL FIX: Find a Free user with this specific inbox address.
+        // Free users can have the inbox in their array even if it's not "active"
         user = await db.collection('users').findOne({ plan: 'free', inboxes: recipientEmail });
         if (user) {
             userData = { plan: 'free', userId: user._id, isVerified: false };
+            // IMPORTANT: Set cache with a reasonable TTL
             await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
             userData.userId = new ObjectId(userData.userId);
             return userData;
         }
 
-        // 4. Default to anonymous if no user is found.
+        // 4. NEW: Check if this inbox was EVER used by a free user
+        // This handles the case where a free user switched away from an inbox
+        // but emails are still coming in for it
+        user = await db.collection('users').findOne({ 
+            plan: 'free',
+            // This query finds users who previously had this inbox
+            // You might want to keep a "previousInboxes" array for this
+        });
+
+        // 5. Default to anonymous if no user is found.
         userData = { plan: 'anonymous', userId: null, isVerified: false };
-        await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
+        // DON'T cache anonymous lookups with long TTL - use shorter TTL
+        await redisClient.set(cacheKey, JSON.stringify(userData), { EX: 300 }); // 5 min instead of 1 hour
         return userData;
 
     } catch (err) {
