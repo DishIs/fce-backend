@@ -3,7 +3,7 @@
 import { Request, Response } from 'express';
 import { db, IUser } from './mongo'; // Assuming db is exported from your mongo connection file
 import { client } from './redis'; // Assuming client is exported
-import { promises as dns } from 'dns'; // <-- Import the dns promises API
+import { promises as dns, MxRecord } from 'dns'; // <-- Import MxRecord from the main module
 
 export async function getDashboardDataHandler(req: Request, res: Response) {
     const { wyiUserId } = req.params;
@@ -114,7 +114,7 @@ export async function verifyDomainHandler(req: Request, res: Response) {
         }
 
         // 4. NEW: Verify MX record points to our server
-        let mxRecords: dns.MxRecord[] = [];
+        let mxRecords: MxRecord[] = []; // <-- Use the imported type here
         try {
             mxRecords = await dns.resolveMx(domain);
         } catch (mxError: any) {
