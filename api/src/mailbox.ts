@@ -32,33 +32,63 @@ function getPlanFromRequest(req: any): 'pro' | 'free' | 'anonymous' {
 }
 
 /**
- * Gets a list of message summaries for a mailbox, based on the user's plan.
+ * Gets a list of message summaries for a mailbox.
+ * FIX: Now checks 'anonymous' storage as a fallback for logged-in users to ensure all emails are visible.
  */
 export async function getInbox(mailbox: string, plan: 'pro' | 'free' | 'anonymous'): Promise<Array<object>> {
     console.log(`getting mailbox summaries for ${mailbox} on plan ${plan}`);
+    
+    // 1. Fetch from the user's current plan (e.g., 'free' or 'pro')
     const indexKey = `maildrop:${plan}:${mailbox}:index`;
     const dataKey = `maildrop:${plan}:${mailbox}:data`;
 
     try {
-        const messageIds = await client.zRange(indexKey, 0, -1, { REV: true });
+        let messageIds = await client.zRange(indexKey, 0, -1, { REV: true });
+        let rawResults: string[] = [];
 
-        if (!messageIds || messageIds.length === 0) {
+        if (messageIds && messageIds.length > 0) {
+            const planResults = await client.hmGet(dataKey, messageIds);
+            rawResults = rawResults.concat(planResults.filter((r): r is string => r !== null));
+        }
+
+        // 2. FALLBACK: If user is logged in (not anonymous), ALSO fetch from 'anonymous' storage.
+        // This covers cases where SMTP saved as anonymous before the user claimed the inbox.
+        if (plan !== 'anonymous') {
+            const anonIndex = `maildrop:anonymous:${mailbox}:index`;
+            const anonData = `maildrop:anonymous:${mailbox}:data`;
+            
+            const anonIds = await client.zRange(anonIndex, 0, -1, { REV: true });
+            if (anonIds && anonIds.length > 0) {
+                const anonResults = await client.hmGet(anonData, anonIds);
+                rawResults = rawResults.concat(anonResults.filter((r): r is string => r !== null));
+            }
+        }
+
+        if (rawResults.length === 0) {
             return [];
         }
 
-        const results = await client.hmGet(dataKey, messageIds);
-
-        // --- REVISED: The mapping function now includes 'wasAttachmentStripped' ---
-        return results
-            .filter(r => r)
+        // 3. Parse, Map, Deduplicate (by ID), and Sort by Date
+        const parsedMessages = rawResults
             .map((result: string) => {
                 const message = JSON.parse(result);
                 return {
-                    id: message.id, from: message.from, to: message.to,
-                    subject: message.subject, date: message.date, hasAttachment: message.hasAttachment,
-                    wasAttachmentStripped: !!message.wasAttachmentStripped, // <-- Add the flag here, ensuring it's a boolean
+                    id: message.id, 
+                    from: message.from, 
+                    to: message.to,
+                    subject: message.subject, 
+                    date: message.date, 
+                    hasAttachment: message.hasAttachment,
+                    wasAttachmentStripped: !!message.wasAttachmentStripped,
                 };
             });
+
+        // Remove duplicates (in case migration ran partially and ID exists in both places)
+        const uniqueMessages = Array.from(new Map(parsedMessages.map(item => [item.id, item])).values());
+
+        // Sort descending by date (newest first)
+        return uniqueMessages.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
     } catch (error) {
         console.error(`Error in getInbox on ${mailbox} (${plan}):`, error);
         throw new Error('Failed to retrieve messages from Redis');
@@ -66,14 +96,23 @@ export async function getInbox(mailbox: string, plan: 'pro' | 'free' | 'anonymou
 }
 
 /**
- * Gets a single, complete message object by its ID, based on the user's plan.
+ * Gets a single, complete message object by its ID.
+ * FIX: Checks fallback anonymous storage if not found in current plan.
  */
 export async function getMessage(mailbox: string, id: string, plan: 'pro' | 'free' | 'anonymous'): Promise<any> {
     console.log(`getting message ${id} from mailbox ${mailbox} on plan ${plan}`);
     const dataKey = `maildrop:${plan}:${mailbox}:data`;
 
     try {
-        const messageStr = await client.hGet(dataKey, id);
+        // 1. Try fetching from current plan
+        let messageStr = await client.hGet(dataKey, id);
+        
+        // 2. Fallback: Try fetching from anonymous if not found
+        if (!messageStr && plan !== 'anonymous') {
+            const anonDataKey = `maildrop:anonymous:${mailbox}:data`;
+            messageStr = await client.hGet(anonDataKey, id);
+        }
+
         if (!messageStr) {
             return null;
         }
@@ -101,7 +140,8 @@ export async function getMessage(mailbox: string, id: string, plan: 'pro' | 'fre
 }
 
 /**
- * Deletes a message by its ID, based on the user's plan.
+ * Deletes a message by its ID.
+ * FIX: Checks fallback anonymous storage if not found in current plan.
  */
 export async function deleteMessageById(mailbox: string, id: string, plan: 'pro' | 'free' | 'anonymous'): Promise<boolean> {
     console.log(`deleting message ${id} from mailbox ${mailbox} on plan ${plan}`);
@@ -109,12 +149,28 @@ export async function deleteMessageById(mailbox: string, id: string, plan: 'pro'
     const dataKey = `maildrop:${plan}:${mailbox}:data`;
 
     try {
+        // 1. Try deleting from current plan
         const [, hdelResult] = await client.multi()
             .zRem(indexKey, id)
             .hDel(dataKey, id)
             .exec();
         
-        return Number(hdelResult) > 0;
+        let deleted = Number(hdelResult) > 0;
+
+        // 2. Fallback: Try deleting from anonymous if not found in current plan
+        if (!deleted && plan !== 'anonymous') {
+            const anonIndex = `maildrop:anonymous:${mailbox}:index`;
+            const anonData = `maildrop:anonymous:${mailbox}:data`;
+            
+            const [, anonHdelResult] = await client.multi()
+                .zRem(anonIndex, id)
+                .hDel(anonData, id)
+                .exec();
+            
+            deleted = Number(anonHdelResult) > 0;
+        }
+        
+        return deleted;
     } catch (error) {
         console.error(`Error deleting message ${id} (${plan}):`, error);
         return false;
