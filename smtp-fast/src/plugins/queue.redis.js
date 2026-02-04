@@ -55,21 +55,27 @@ exports.shutdown = function () {
 
 async function getUserData(recipientEmail) {
     if (!db || !redisClient.isOpen) return { plan: 'anonymous', userId: null, isVerified: false };
+    
     try {
         const cacheKey = `user_data_cache:${recipientEmail}`;
         const cachedData = await redisClient.get(cacheKey);
+        
         if (cachedData) {
             const data = JSON.parse(cachedData);
+            // Ensure userId is converted back to ObjectId if it exists
             data.userId = data.userId ? new ObjectId(data.userId) : null;
             return data;
         }
 
-        const recipientDomain = recipientEmail.split('@')[1];
+        // Use safe splitting
+        const parts = recipientEmail.split('@');
+        const recipientDomain = parts.length > 1 ? parts[1] : '';
         const ttl = parseInt(plugin.cfg.main.plan_cache_ttl, 10) || 3600;
+
         let user;
         let userData;
 
-        // 1. Prioritize pro users with a verified custom domain.
+        // 1. Check for Pro User with Verified Custom Domain
         user = await db.collection('users').findOne({
             plan: 'pro',
             'customDomains.domain': recipientDomain,
@@ -79,35 +85,43 @@ async function getUserData(recipientEmail) {
         if (user) {
             userData = { plan: 'pro', userId: user._id, isVerified: true };
             await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
-            userData.userId = new ObjectId(userData.userId);
-            return userData;
+            return userData; // userId is already ObjectId
         }
 
-        // 2. Find a Pro user with this specific inbox address.
-        user = await db.collection('users').findOne({ plan: 'pro', inboxes: recipientEmail });
+        // 2. CRITICAL FIX: Check if this specific email exists in ANY Pro user's inboxes
+        // We look for a user where plan='pro' AND the inboxes array contains this email
+        user = await db.collection('users').findOne({ 
+            plan: 'pro', 
+            inboxes: recipientEmail 
+        });
+
         if (user) {
+            plugin.logdebug(`Found PRO user via inbox list for ${recipientEmail}`);
             userData = { plan: 'pro', userId: user._id, isVerified: false };
             await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
-            userData.userId = new ObjectId(userData.userId);
             return userData;
         }
 
-        // 3. Find a Free user with this specific inbox address.
-        user = await db.collection('users').findOne({ plan: 'free', inboxes: recipientEmail });
+        // 3. Check for Free User with specific inbox
+        user = await db.collection('users').findOne({ 
+            plan: 'free', 
+            inboxes: recipientEmail 
+        });
+
         if (user) {
             userData = { plan: 'free', userId: user._id, isVerified: false };
             await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
-            userData.userId = new ObjectId(userData.userId);
             return userData;
         }
 
-        // 4. Default to anonymous if no user is found.
+        // 4. Default to anonymous
         userData = { plan: 'anonymous', userId: null, isVerified: false };
         await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
         return userData;
 
     } catch (err) {
         plugin.logerror(`Error fetching user data for ${recipientEmail}: ${err}`);
+        // Default safe fallback
         return { plan: 'anonymous', userId: null, isVerified: false };
     }
 }

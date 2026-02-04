@@ -24,11 +24,14 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
 
         let successMessage: string;
 
+        // --- Logic to update DB Inboxes List ---
         if (user.plan === 'pro') {
+            // Pro users keep all inboxes, just move current to top
             inboxes = inboxes.filter(i => i !== normalizedInbox);
             inboxes.unshift(normalizedInbox);
             successMessage = "Inbox added successfully.";
         } else {
+            // Free users only get 1 active inbox
             if (inboxes[0] === normalizedInbox) {
                 return res.status(200).json({
                     success: true,
@@ -51,32 +54,19 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
         // --- FIXED: Redis cache handling ---
         if (client.isOpen) {
             const ttl = parseInt(process.env.PLAN_CACHE_TTL || "3600", 10);
-
-            // FIX: For FREE users, we DON'T delete old caches anymore
-            // This prevents emails from being saved to the wrong plan namespace
-            // when users switch between inboxes
             
-            // OPTION 1 (Recommended): Keep cache for the current inbox only
-            // This works because getUserData will fall back to MongoDB and find the user
-            // as long as the inbox is in their inboxes array
-            
-            // Set cache entry for the current inbox
-            const cacheKey = `user_data_cache:${normalizedInbox}`;
             const userData = {
                 plan: user.plan,
                 userId: user._id,
-                isVerified: false
+                isVerified: false // Default for standard inboxes
             };
-            await client.set(cacheKey, JSON.stringify(userData), { EX: ttl });
 
-            // CRITICAL: For free users, keep cache alive for ALL their inboxes
-            // even though they only have one "active" inbox in the UI
-            // This ensures incoming emails always use the correct plan
-            if (user.plan === 'free' && Array.isArray(user.inboxes)) {
-                for (const inbox of user.inboxes) {
-                    const inboxCacheKey = `user_data_cache:${inbox.toLowerCase()}`;
-                    await client.set(inboxCacheKey, JSON.stringify(userData), { EX: ttl });
-                }
+            // FIX: Loop through ALL inboxes in the array and update cache.
+            // This ensures that if a Pro user has 10 inboxes, ALL 10 are recognized as 'pro'
+            // immediately, not just the one they just switched to.
+            for (const inbox of inboxes) {
+                const inboxCacheKey = `user_data_cache:${inbox}`;
+                await client.set(inboxCacheKey, JSON.stringify(userData), { EX: ttl });
             }
         }
 
