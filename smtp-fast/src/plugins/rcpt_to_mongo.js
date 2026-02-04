@@ -93,9 +93,10 @@ exports.check_custom_domain = async function (next, connection, params) {
         });
 
         if (userWithDomain) {
-            // Find the exact domain record to get its TXT verification value
+            // Find the exact domain record to get its TXT verification value and MX record
             const domainRecord = userWithDomain.customDomains.find(d => d.domain === domain && d.verified);
             const expectedTxtValue = domainRecord?.txtRecord;
+            const expectedMxHost = domainRecord?.mxRecord || 'mx.freecustom.email';
 
             if (!expectedTxtValue) {
                 plugin.logerror(`Verified domain ${domain} has no TXT record stored.`);
@@ -103,11 +104,11 @@ exports.check_custom_domain = async function (next, connection, params) {
             }
 
             try {
-                // DNS lookup to ensure the TXT record still matches
+                // --- TXT Record Validation ---
                 const txtRecords = await dns.resolveTxt(domain);
-                const isVerified = txtRecords.flat().includes(expectedTxtValue);
+                const isTxtVerified = txtRecords.flat().includes(expectedTxtValue);
 
-                if (!isVerified) {
+                if (!isTxtVerified) {
                     // TXT record no longer matches — instantly set verified=false
                     await db.collection('users').updateOne(
                         { _id: userWithDomain._id, "customDomains.domain": domain },
@@ -121,14 +122,51 @@ exports.check_custom_domain = async function (next, connection, params) {
                     return next(DENY, `Domain ${domain} TXT record mismatch. Contact admin to re-verify.`);
                 }
 
-                // ✅ Passed DNS check — cache and accept
+                // --- NEW: MX Record Validation ---
+                let mxRecords = [];
+                try {
+                    mxRecords = await dns.resolveMx(domain);
+                } catch (mxError) {
+                    if (mxError.code === 'ENODATA' || mxError.code === 'ENOTFOUND') {
+                        // MX record missing - revoke verification
+                        await db.collection('users').updateOne(
+                            { _id: userWithDomain._id, "customDomains.domain": domain },
+                            { $set: { "customDomains.$.verified": false } }
+                        );
+                        await redisClient.sRem(customDomainsSetKey, domain);
+                        
+                        plugin.logerror(`MX record not found for ${domain}. Verification revoked.`);
+                        return next(DENY, `Domain ${domain} has no MX record. Contact admin to re-verify.`);
+                    }
+                    throw mxError; // Re-throw other errors
+                }
+
+                const isMxValid = mxRecords.some(mx => 
+                    mx.exchange.toLowerCase() === expectedMxHost.toLowerCase() ||
+                    mx.exchange.toLowerCase().endsWith('.freecustom.email')
+                );
+
+                if (!isMxValid) {
+                    // MX record doesn't point to our server - revoke verification
+                    await db.collection('users').updateOne(
+                        { _id: userWithDomain._id, "customDomains.domain": domain },
+                        { $set: { "customDomains.$.verified": false } }
+                    );
+                    await redisClient.sRem(customDomainsSetKey, domain);
+
+                    const currentMxHosts = mxRecords.map(m => m.exchange).join(', ');
+                    plugin.logerror(`MX record mismatch for ${domain}. Expected ${expectedMxHost}, got: ${currentMxHosts}`);
+                    return next(DENY, `Domain ${domain} MX record mismatch. Contact admin to re-verify.`);
+                }
+
+                // ✅ Passed both TXT and MX checks — cache and accept
                 await redisClient.sAdd(customDomainsSetKey, domain);
-                connection.logdebug(plugin, `Domain ${domain} passed DNS TXT check and verified.`);
+                connection.logdebug(plugin, `Domain ${domain} passed both TXT and MX validation.`);
                 return next(OK);
 
             } catch (err) {
                 plugin.logerror(`DNS lookup failed for ${domain}: ${err.message}`);
-                return next(DENYSOFT, `Could not verify TXT record for ${domain}. Try again later.`);
+                return next(DENYSOFT, `Could not verify DNS records for ${domain}. Try again later.`);
             }
         }
 

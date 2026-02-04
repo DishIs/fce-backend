@@ -107,29 +107,59 @@ export async function verifyDomainHandler(req: Request, res: Response) {
 
         // 3. Check if any of the found TXT records match our required value
         const expectedTxtValue = domainRecord.txtRecord;
-        const isVerified = txtRecords.flat().includes(expectedTxtValue);
+        const isTxtVerified = txtRecords.flat().includes(expectedTxtValue);
 
-        if (isVerified) {
-            // 4. Mark verified in the current user's record
-            await db.collection('users').updateOne(
-                { wyiUserId, "customDomains.domain": domain },
-                { $set: { "customDomains.$.verified": true } }
-            );
-
-            // 5. Remove this domain from ALL other users
-            await db.collection('users').updateMany(
-                { wyiUserId: { $ne: wyiUserId } },
-                { $pull: { customDomains: { domain: domain } } as any } // <-- cast to any
-            );
-
-
-            // 6. Add to Redis cache so Haraka can start accepting emails
-            await client.sAdd('verified_custom_domains', domain.toLowerCase());
-
-            return res.status(200).json({ success: true, verified: true, message: 'Domain successfully verified!' });
-        } else {
+        if (!isTxtVerified) {
             return res.status(400).json({ success: false, verified: false, message: 'TXT record found, but the value does not match. Please double-check.' });
         }
+
+        // 4. NEW: Verify MX record points to our server
+        let mxRecords: dns.MxRecord[] = [];
+        try {
+            mxRecords = await dns.resolveMx(domain);
+        } catch (mxError: any) {
+            if (mxError.code === 'ENODATA' || mxError.code === 'ENOTFOUND') {
+                return res.status(400).json({ 
+                    success: false, 
+                    verified: false, 
+                    message: 'MX record not found. Please add an MX record pointing to mx.freecustom.email' 
+                });
+            }
+            console.error(`MX lookup failed for ${domain}:`, mxError);
+            throw new Error('Could not query MX records for the domain.');
+        }
+
+        // Check if at least one MX record points to our server
+        const expectedMxHost = domainRecord.mxRecord || 'mx.freecustom.email';
+        const isMxValid = mxRecords.some(mx => 
+            mx.exchange.toLowerCase() === expectedMxHost.toLowerCase() ||
+            mx.exchange.toLowerCase().endsWith('.freecustom.email')
+        );
+
+        if (!isMxValid) {
+            return res.status(400).json({ 
+                success: false, 
+                verified: false, 
+                message: `MX record must point to ${expectedMxHost}. Current MX records: ${mxRecords.map(m => m.exchange).join(', ')}` 
+            });
+        }
+
+        // 5. Both TXT and MX verified - mark as verified
+        await db.collection('users').updateOne(
+            { wyiUserId, "customDomains.domain": domain },
+            { $set: { "customDomains.$.verified": true } }
+        );
+
+        // 6. Remove this domain from ALL other users
+        await db.collection('users').updateMany(
+            { wyiUserId: { $ne: wyiUserId } },
+            { $pull: { customDomains: { domain: domain } } as any } // <-- cast to any
+        );
+
+        // 7. Add to Redis cache so Haraka can start accepting emails
+        await client.sAdd('verified_custom_domains', domain.toLowerCase());
+
+        return res.status(200).json({ success: true, verified: true, message: 'Domain successfully verified! Both TXT and MX records are correct.' });
 
     } catch (error: any) {
         console.error(`Error during domain verification for ${domain}:`, error);

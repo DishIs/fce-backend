@@ -238,3 +238,76 @@ export async function getUserProfileHandler(req: Request, res: Response) {
         return res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
 }
+
+
+// Add this to your user.ts file
+
+export async function getUserStorageHandler(req: Request, res: Response) {
+    const { wyiUserId } = req.params;
+
+    if (!wyiUserId) {
+        return res.status(400).json({ success: false, message: 'User ID is required.' });
+    }
+
+    try {
+        const user = await db.collection('users').findOne({ wyiUserId });
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found.' });
+        }
+
+        if (user.plan !== 'pro') {
+            return res.status(200).json({ 
+                success: true, 
+                storageUsed: 0,
+                storageLimit: 0,
+                percentUsed: 0,
+                message: 'Storage tracking only available for Pro users.'
+            });
+        }
+
+        // Calculate total storage used
+        const result = await db.collection('saved_emails').aggregate([
+            { $match: { userId: user._id } },
+            { $unwind: { path: "$attachments", preserveNullAndEmptyArrays: true } },
+            { 
+                $group: { 
+                    _id: null, 
+                    totalBytes: { $sum: { $ifNull: ["$attachments.size", 0] } },
+                    emailCount: { $sum: 1 }
+                }
+            }
+        ]).toArray();
+
+        const totalBytes = result[0]?.totalBytes || 0;
+        const emailCount = result[0]?.emailCount || 0;
+        const limitBytes = 5 * 1024 * 1024 * 1024; // 5GB
+
+        return res.status(200).json({
+            success: true,
+            storageUsed: totalBytes,
+            storageLimit: limitBytes,
+            percentUsed: (totalBytes / limitBytes * 100).toFixed(2),
+            emailCount: emailCount,
+            storageUsedFormatted: formatBytes(totalBytes),
+            storageLimitFormatted: '5 GB',
+            storageRemaining: limitBytes - totalBytes,
+            storageRemainingFormatted: formatBytes(limitBytes - totalBytes)
+        });
+
+    } catch (error) {
+        console.error(`Error fetching storage usage for user ${wyiUserId}:`, error);
+        return res.status(500).json({ success: false, message: 'Internal Server Error' });
+    }
+}
+
+// Helper function to format bytes
+function formatBytes(bytes: number): string {
+    if (bytes === 0) return '0 Bytes';
+    
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
