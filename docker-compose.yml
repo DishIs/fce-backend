@@ -6,7 +6,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx:/nginx          # scripts live here now
+      - ./nginx:/nginx # scripts live here now
       - ./nginx/conf.d:/etc/nginx/conf.d
       - certs:/etc/letsencrypt
       - ./certbot-webroot:/var/www/certbot
@@ -21,7 +21,7 @@ services:
 
   certbot:
     image: certbot/certbot
-    profiles: ["manual"]
+    profiles: [ "manual" ]
     container_name: certbot
     volumes:
       - certs:/etc/letsencrypt
@@ -29,16 +29,7 @@ services:
       - ./smtp-fast/src/config:/haraka-config
     entrypoint: /bin/sh -c
     command: >
-      "certbot certonly --webroot
-      --webroot-path=/var/www/certbot
-      --email dishantsinghdev@icloud.com
-      --agree-tos --no-eff-email
-      --key-type ecdsa --elliptic-curve secp384r1
-      -d api2.freecustom.email
-      -d mx.freecustom.email &&
-      echo 'Copying initial certs to Haraka config...' &&
-      cp /etc/letsencrypt/live/api2.freecustom.email/privkey.pem /haraka-config/tls_key.pem &&
-      cp /etc/letsencrypt/live/api2.freecustom.email/fullchain.pem /haraka-config/tls_cert.pem"
+      "certbot certonly --webroot --webroot-path=/var/www/certbot --email dishantsinghdev@icloud.com --agree-tos --no-eff-email --key-type ecdsa --elliptic-curve secp384r1 -d api2.freecustom.email -d mx.freecustom.email && echo 'Copying initial certs to Haraka config...' && cp /etc/letsencrypt/live/api2.freecustom.email/privkey.pem /haraka-config/tls_key.pem && cp /etc/letsencrypt/live/api2.freecustom.email/fullchain.pem /haraka-config/tls_cert.pem"
 
   certbot-renew:
     image: certbot/certbot
@@ -77,6 +68,25 @@ services:
       - "3000"
     restart: unless-stopped
 
+  cleanup:
+    build:
+      context: ./api
+    container_name: maildrop-cleanup
+    command: >
+      sh -c "
+        echo 'Cleanup worker started';
+        while true; do
+          node dist/cleanup-job.js;
+          echo 'Cleanup finished. Sleeping 24h...';
+          sleep 86400;
+        done
+      "
+    environment:
+      MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
   haraka:
     build:
       context: ./smtp-fast
@@ -101,12 +111,7 @@ services:
     container_name: redis_server
     ports:
       - "6379:6379"
-    command: [
-      "redis-server",
-      "--bind", "0.0.0.0",
-      "--appendonly", "yes",
-      "--requirepass", "${REDIS_PASSWORD}"
-    ]
+    command: [ "redis-server", "--bind", "0.0.0.0", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD}" ]
     restart: unless-stopped
     volumes:
       - maildrop_redis_data:/data
