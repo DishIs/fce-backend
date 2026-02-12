@@ -5,10 +5,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { Request, Response } from 'express';
 
 // ── Updated getUser() helper ───────────────────────────────────────────────
-// Now checks both wyiUserId (primary) AND linkedProviderIds (aliases).
-// Use this everywhere in user.ts instead of a direct findOne({ wyiUserId }).
-
-async function getUser(userId: string): Promise<IUser | null> {
+// Checks both wyiUserId (primary) AND linkedProviderIds (aliases).
+export async function getUser(userId: string): Promise<IUser | null> {
     return await db.collection<IUser>('users').findOne({
         $or: [
             { wyiUserId: userId },
@@ -17,17 +15,12 @@ async function getUser(userId: string): Promise<IUser | null> {
     });
 }
 
-
 // ------------------------------------------------------------------
 // STATUS & SETTINGS HANDLERS
 // ------------------------------------------------------------------
 
-/**
- * Returns the user's current status, specifically their plan.
- * Used by NextAuth 'jwt' callback to refresh session data.
- */
 export async function getUserStatusHandler(req: Request, res: Response) {
-    const { userId } = req.body; // Sent as { userId: token.id }
+    const { userId } = req.body;
 
     if (!userId) {
         return res.status(400).json({ success: false, message: 'User ID required' });
@@ -39,11 +32,10 @@ export async function getUserStatusHandler(req: Request, res: Response) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
-        // Return critical session data
-        return res.status(200).json({ 
-            success: true, 
+        return res.status(200).json({
+            success: true,
             plan: user.plan,
-            subscriptionStatus: user.subscription?.status 
+            subscriptionStatus: user.subscription?.status
         });
     } catch (error) {
         console.error("Error getting user status:", error);
@@ -51,22 +43,24 @@ export async function getUserStatusHandler(req: Request, res: Response) {
     }
 }
 
-/**
- * Updates user preferences/settings (Theme, Shortcuts, Notifications).
- */
 export async function updateSettingsHandler(req: Request, res: Response) {
-    const { wyiUserId, ...settings } = req.body; // Expect body to contain settings keys directly or nested
+    const { wyiUserId, ...settings } = req.body;
 
     if (!wyiUserId) {
         return res.status(400).json({ success: false, message: 'User ID required' });
     }
 
     try {
-        // Sanitize: ensure we don't accidentally save the ID as a setting
         const settingsToUpdate = { ...settings } as IUserSettings;
 
+        // Update using $or to match either ID
         await db.collection('users').updateOne(
-            { wyiUserId },
+            {
+                $or: [
+                    { wyiUserId: wyiUserId },
+                    { linkedProviderIds: wyiUserId }
+                ]
+            },
             { $set: { settings: settingsToUpdate } }
         );
 
@@ -77,11 +71,8 @@ export async function updateSettingsHandler(req: Request, res: Response) {
     }
 }
 
-/**
- * Retrieves user settings.
- */
 export async function getSettingsHandler(req: Request, res: Response) {
-    const { wyiUserId } = req.body; // Or query param depending on implementation
+    const { wyiUserId } = req.body;
 
     if (!wyiUserId) {
         return res.status(400).json({ success: false, message: 'User ID required' });
@@ -99,10 +90,6 @@ export async function getSettingsHandler(req: Request, res: Response) {
 // SUBSCRIPTION & BILLING HANDLERS
 // ------------------------------------------------------------------
 
-/**
- * Called by Next.js API after validating a PayPal subscription.
- * Upgrades the user to PRO and logs the subscription.
- */
 export async function upgradeUserSubscriptionHandler(req: Request, res: Response) {
     const { userId, subscriptionId, planId, status, startTime, payer } = req.body;
 
@@ -134,14 +121,20 @@ export async function upgradeUserSubscriptionHandler(req: Request, res: Response
         // 1. Log the transaction
         await db.collection('payment_logs').insertOne(paymentLog);
 
-        // 2. Update User: Set Plan to PRO and save subscription details
+        // 2. Update User: Set Plan to PRO
+        // Use $or to ensure we find the user even if userId is a linked provider ID
         const updateResult = await db.collection('users').updateOne(
-            { wyiUserId: userId },
-            { 
-                $set: { 
+            {
+                $or: [
+                    { wyiUserId: userId },
+                    { linkedProviderIds: userId }
+                ]
+            },
+            {
+                $set: {
                     plan: 'pro',
                     subscription: subscriptionData
-                } 
+                }
             }
         );
 
@@ -158,13 +151,8 @@ export async function upgradeUserSubscriptionHandler(req: Request, res: Response
 }
 
 // ------------------------------------------------------------------
-// EXISTING HANDLERS (UPDATED)
+// UPSERT / AUTH
 // ------------------------------------------------------------------
-// api/src/user.ts — replace upsertUserHandler with this version
-//
-// This handles the case where a user signs in with a different provider
-// but uses the same email address. Instead of creating a duplicate account,
-// it links the new provider ID to the existing account.
 
 export async function upsertUserHandler(req: Request, res: Response) {
     const { wyiUserId, email, name, plan } = req.body;
@@ -176,14 +164,11 @@ export async function upsertUserHandler(req: Request, res: Response) {
     try {
         const usersCollection = db.collection('users');
 
-        // ── 1. Check if this exact userId already exists ──────────────────
+        // 1. Check if this exact userId already exists (Primary ID check)
         const exactMatch = await usersCollection.findOne({ wyiUserId });
 
         if (exactMatch) {
-            // User exists under this provider ID — just refresh login metadata.
-            // Guard against downgrading a pro user.
             const planToSet = exactMatch.plan === 'pro' ? 'pro' : (plan || 'free');
-
             await usersCollection.updateOne(
                 { wyiUserId },
                 {
@@ -198,45 +183,34 @@ export async function upsertUserHandler(req: Request, res: Response) {
             return res.status(200).json({ success: true, message: 'User synchronized successfully.' });
         }
 
-        // ── 2. No exact match — check if another account uses this email ──
-        // This happens when a user signs in with a different provider (e.g.,
-        // previously used WYI, now signing in with Google using same email).
+        // 2. No exact match — check if another account uses this email
         const emailMatch = await usersCollection.findOne({
             email: email.toLowerCase().trim(),
         });
 
         if (emailMatch) {
-            // Found an existing account with this email.
-            // Add the new provider ID as an alias instead of creating a duplicate.
+            // Link the new provider ID to the existing account
             await usersCollection.updateOne(
                 { _id: emailMatch._id },
                 {
                     $set: {
                         lastLoginAt: new Date(),
-                        // Optionally update name if it was empty
                         ...(emailMatch.name ? {} : { name }),
                     },
-                    // Track all provider IDs this user has used
                     $addToSet: {
-                        linkedProviderIds: wyiUserId,
+                        linkedProviderIds: wyiUserId, // Add alias
                     }
                 }
             );
 
-            // IMPORTANT: The JWT token.id will be this new wyiUserId, but
-            // the DB record lives under the original ID. To make /user/status
-            // lookups work, we need to also match on linkedProviderIds.
-            // See the updated getUser() helper below.
-
             return res.status(200).json({
                 success: true,
                 message: 'Linked to existing account.',
-                // Send back the canonical ID so the frontend can use it
                 canonicalId: emailMatch.wyiUserId,
             });
         }
 
-        // ── 3. Truly new user — create a fresh record ─────────────────────
+        // 3. Truly new user
         await usersCollection.updateOne(
             { wyiUserId },
             {
@@ -254,7 +228,7 @@ export async function upsertUserHandler(req: Request, res: Response) {
                     customDomains: [],
                     mutedSenders: [],
                     settings: {},
-                    linkedProviderIds: [wyiUserId],
+                    linkedProviderIds: [wyiUserId], // Initialize with self
                 }
             },
             { upsert: true }
@@ -268,9 +242,10 @@ export async function upsertUserHandler(req: Request, res: Response) {
     }
 }
 
+// ------------------------------------------------------------------
+// DOMAIN & FEATURE HANDLERS
+// ------------------------------------------------------------------
 
-
-// Handler to add a custom domain for a pro user
 export async function addDomainHandler(req: any, res: any) {
     const { wyiUserId, domain } = req.body;
     const normalizedDomain = domain?.trim().toLowerCase();
@@ -283,16 +258,18 @@ export async function addDomainHandler(req: any, res: any) {
         return res.status(403).json({ success: false, message: 'Permission denied.' });
     }
 
+    // Check if domain exists on ANY user (excluding current user)
     const existing = await db.collection('users').findOne({
         "customDomains.domain": normalizedDomain,
         "customDomains.verified": true,
-        wyiUserId: { $ne: wyiUserId }
+        _id: { $ne: user._id } // Use _id for exclusion to be safe
     });
 
     if (existing) {
         return res.status(409).json({ success: false, message: 'This domain is already verified for another account.' });
     }
 
+    // Check if user already added it
     const alreadyExists = await db.collection('users').findOne({
         _id: user._id,
         "customDomains.domain": normalizedDomain
@@ -331,6 +308,7 @@ export async function muteSenderHandler(req: any, res: any) {
         { $addToSet: { mutedSenders: senderToMute.toLowerCase() } }
     );
 
+    // Use the canonical wyiUserId for Redis key consistency
     const userMuteListKey = `mutelist:${user.wyiUserId}`;
     await redisClient.sAdd(userMuteListKey, senderToMute.toLowerCase());
 
@@ -346,8 +324,13 @@ export async function unmuteSenderHandler(req: Request, res: Response) {
     if (user.plan !== 'pro') return res.status(403).json({ success: false, message: 'Permission denied.' });
 
     const sender = senderToUnmute.toLowerCase();
-    await db.collection('users').updateOne({ wyiUserId }, { $pull: { mutedSenders: sender } });
-    await redisClient.sRem(`mutelist:${wyiUserId}`, sender);
+
+    await db.collection('users').updateOne(
+        { _id: user._id },
+        { $pull: { mutedSenders: sender } }
+    );
+
+    await redisClient.sRem(`mutelist:${user.wyiUserId}`, sender);
 
     res.status(200).json({ success: true, message: 'Sender has been un-muted.' });
 }
@@ -357,7 +340,7 @@ export async function getDomainsHandler(req: Request, res: Response) {
     if (!wyiUserId) return res.status(400).json({ success: false, message: 'User ID is required.' });
 
     try {
-        const user = await db.collection('users').findOne({ wyiUserId }, { projection: { customDomains: 1, _id: 0 } });
+        const user = await getUser(wyiUserId);
         res.status(200).json({ success: true, domains: user?.customDomains || [] });
     } catch (error) {
         res.status(500).json({ success: false, message: 'Internal server error.' });
@@ -367,9 +350,13 @@ export async function getDomainsHandler(req: Request, res: Response) {
 export async function getUserProfileHandler(req: Request, res: Response) {
     const { wyiUserId } = req.params;
     try {
-        const user = await db.collection('users').findOne({ wyiUserId }, { projection: { _id: 0, password: 0 } });
+        const user = await getUser(wyiUserId);
         if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
-        return res.status(200).json({ success: true, user: user });
+
+        // Remove sensitive data manually since we fetched the whole user
+        const { password, ...safeUser } = user as any;
+
+        return res.status(200).json({ success: true, user: safeUser });
     } catch (error) {
         return res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
@@ -380,11 +367,11 @@ export async function getUserStorageHandler(req: Request, res: Response) {
     if (!wyiUserId) return res.status(400).json({ success: false, message: 'User ID is required.' });
 
     try {
-        const user = await db.collection('users').findOne({ wyiUserId });
+        const user = await getUser(wyiUserId);
         if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
 
         if (user.plan !== 'pro') {
-            return res.status(200).json({ 
+            return res.status(200).json({
                 success: true, storageUsed: 0, storageLimit: 0, percentUsed: 0, message: 'Pro only.'
             });
         }
