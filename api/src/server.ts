@@ -1,4 +1,3 @@
-// /home/dit/maildrop/api/src/server.ts
 import express from 'express';
 import { createServer } from 'http';
 import WebSocket from 'ws';
@@ -7,9 +6,22 @@ import { getStats, statsHandler } from './statistics';
 import { subscriber } from './redis';
 import dotenv from 'dotenv';
 import { connectToMongo } from './mongo';
-import { addDomainHandler, getDomainsHandler, getUserProfileHandler, muteSenderHandler, upsertUserHandler } from './user';
-import { deleteDomainHandler, getDashboardDataHandler, unmuteSenderHandler, verifyDomainHandler } from './domain-handler';
+import {
+  addDomainHandler,
+  getDomainsHandler,
+  getUserProfileHandler,
+  muteSenderHandler,
+  upsertUserHandler,
+  unmuteSenderHandler,
+  getUserStorageHandler,
+  getUserStatusHandler,
+  updateSettingsHandler,
+  getSettingsHandler,
+  upgradeUserSubscriptionHandler
+} from './user';
+import { deleteDomainHandler, getDashboardDataHandler, verifyDomainHandler } from './domain-handler';
 import { addInboxHandler } from './inbox-handler';
+import { handlePayPalSubscriptionEvent } from './paypal-handler';
 
 dotenv.config();
 
@@ -22,28 +34,19 @@ connectToMongo().then(() => {
   }
 
   const internalApiAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
-    // Express automatically lowercases header names
     const providedKey = req.header('x-internal-api-key');
     if (providedKey && providedKey === INTERNAL_API_KEY) {
       return next();
     }
-    // Return to prevent further execution
     return res.status(401).json({ success: false, message: 'Unauthorized: Invalid or missing API key.' });
   };
 
-  // --- CORRECT MIDDLEWARE ORDER ---
-
-  // 1. Register the body parser first to handle all incoming request bodies.
   app.use(express.json());
 
-  // 2. Register your authentication middleware next.
-  // It will apply to all routes defined after this point.
   app.use((req, res, next) => {
-    // If the request is a WebSocket upgrade, skip API key authentication.
     if (req.headers.upgrade && req.headers.upgrade.toLowerCase() === 'websocket') {
       next();
     } else {
-      // Otherwise, enforce the internal API key check.
       internalApiAuth(req, res, next);
     }
   });
@@ -52,29 +55,47 @@ connectToMongo().then(() => {
   const wss = new WebSocket.Server({ server });
   const PORT = process.env.PORT || 3000;
 
-
   // --- API Routes ---
-  // These routes are now protected by the middleware above.
+
+  // Public Mailbox Routes (Protected by API Key, accessed by Frontend)
   app.get('/mailbox/:name', listHandler);
   app.get('/mailbox/:name/message/:id', messageHandler);
   app.delete('/mailbox/:name/message/:id', deleteHandler);
+
+  // Auth & User Lifecycle
   app.post('/auth/upsert-user', upsertUserHandler);
+  app.post('/user/status', getUserStatusHandler); // NEW: Get Plan/Sub status
   app.get('/user/profile/:wyiUserId', getUserProfileHandler);
+
+  // Settings & Dashboard
+  app.post('/user/settings', updateSettingsHandler); // NEW: Update Settings
+  app.post('/user/get-settings', getSettingsHandler); // NEW: Get Settings
   app.get('/user/:wyiUserId/dashboard-data', getDashboardDataHandler);
-  app.delete('/user/domains', deleteDomainHandler);
-  app.post('/user/domains/verify', verifyDomainHandler);
-  app.delete('/user/mute', unmuteSenderHandler);
+  app.get('/user/:wyiUserId/storage', getUserStorageHandler);
+
+  // Domains
   app.get('/user/:wyiUserId/domains', getDomainsHandler);
   app.post('/user/domains', addDomainHandler);
+  app.post('/user/domains/verify', verifyDomainHandler);
+  app.delete('/user/domains', deleteDomainHandler);
+
+  // Features (Mute, Inboxes)
   app.post('/user/mute', muteSenderHandler);
+  app.delete('/user/mute', unmuteSenderHandler);
   app.post('/user/inboxes', addInboxHandler);
 
-  // The /health route is also protected by the key. If you want it to be public,
-  // move it ABOVE the app.use(internalApiAuth) block.
+  // Billing (Internal/NextJS callback)
+  app.post('/user/upgrade', upgradeUserSubscriptionHandler); // NEW: Upgrade to Pro
+
+  // ✅ NEW: PayPal Webhook event relay (called from Next.js webhook route)
+  app.post('/paypal/subscription-event', handlePayPalSubscriptionEvent);
+
+
+  // Health
   app.get('/health', statsHandler);
 
 
-  // --- WebSocket Logic (remains unchanged) ---
+  // --- WebSocket Logic ---
   const mailboxClients: Record<string, Set<WebSocket>> = {};
 
   async function sendStatsToAllStatsClients() {
@@ -132,11 +153,9 @@ connectToMongo().then(() => {
         const event = JSON.parse(message);
         const mailbox = channel.split(':')[2];
         if (mailbox === 'stats') {
-          // If we receive a message on mailbox:events:stats, refresh everyone connected to 'stats'
           sendStatsToAllStatsClients();
           return;
         }
-
         notifyMailbox(mailbox, event);
       } catch (e) {
         console.error('Failed to handle new mail pub/sub message:', e);
