@@ -1,7 +1,8 @@
+// api/src/mailbox.ts
 import { client } from "./redis";
 import bigInt from "big-integer";
 import ratelimit from "./ratelimit";
-import { gfs } from './mongo';
+import { gfs, db } from './mongo';
 import { Readable } from 'stream';
 import { ObjectId } from 'mongodb';
 import * as jwt from 'jsonwebtoken';
@@ -19,7 +20,7 @@ interface UserJwtPayload {
 function getPlanFromRequest(req: any): 'pro' | 'free' | 'anonymous' {
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
-        const token = authHeader.substring(7, authHeader.length);
+        const token = authHeader.substring(7);
         try {
             const decoded = jwt.verify(token, JWT_SECRET) as UserJwtPayload;
             return decoded.plan || 'anonymous';
@@ -31,32 +32,169 @@ function getPlanFromRequest(req: any): 'pro' | 'free' | 'anonymous' {
     return 'anonymous';
 }
 
+// ---------------------------------------------------------------
+// MongoDB Fallback Helpers (Pro users only)
+// Called when Redis doesn't have the data (eviction, restart, etc.)
+// ---------------------------------------------------------------
+
 /**
- * Gets a list of message summaries for a mailbox.
- * FIX: Now checks 'anonymous' storage as a fallback for logged-in users to ensure all emails are visible.
+ * Hydrate a raw GridFS attachment reference into base64 content.
+ * Shared by both Redis and MongoDB code paths.
  */
-export async function getInbox(mailbox: string, plan: 'pro' | 'free' | 'anonymous'): Promise<Array<object>> {
+async function hydrateAttachments(attachments: any[]): Promise<any[]> {
+    if (!attachments || attachments.length === 0) return attachments;
+
+    return Promise.all(attachments.map(async (att) => {
+        const gridfsId = att.gridfs_id || att.gridfsId;
+        if (!gridfsId) return att;
+
+        try {
+            const downloadStream = gfs.openDownloadStream(
+                typeof gridfsId === 'string' ? new ObjectId(gridfsId) : gridfsId
+            );
+            const chunks: Buffer[] = [];
+            for await (const chunk of downloadStream) {
+                chunks.push(chunk);
+            }
+            return {
+                ...att,
+                content: Buffer.concat(chunks).toString('base64'),
+                gridfs_id: undefined,
+                gridfsId: undefined,
+            };
+        } catch (err) {
+            console.error(`Failed to hydrate attachment ${gridfsId}:`, err);
+            return att; // Return without content rather than crashing
+        }
+    }));
+}
+
+/**
+ * Fetch inbox summaries from MongoDB for a pro user.
+ * Returns the same shape as the Redis path so callers can merge them.
+ */
+async function getInboxFromMongo(mailbox: string): Promise<any[]> {
+    if (!db) return [];
+    try {
+        const docs = await db.collection('saved_emails')
+            .find({ mailbox })
+            .sort({ date: -1 })
+            .limit(200) // Cap at 200 for performance — they can paginate later
+            .project({
+                messageId: 1,
+                from: 1,
+                to: 1,
+                subject: 1,
+                date: 1,
+                'attachments.filename': 1,
+                wasAttachmentStripped: 1,
+            })
+            .toArray();
+
+        return docs.map(doc => ({
+            id: doc.messageId,
+            from: typeof doc.from === 'object' ? doc.from?.text || doc.from?.value?.[0]?.address : doc.from,
+            to: mailbox,
+            subject: doc.subject,
+            date: doc.date instanceof Date ? doc.date.toISOString() : doc.date,
+            hasAttachment: Array.isArray(doc.attachments) && doc.attachments.length > 0,
+            wasAttachmentStripped: !!doc.wasAttachmentStripped,
+            _source: 'mongo', // Internal marker for deduplication
+        }));
+    } catch (err) {
+        console.error(`MongoDB getInbox failed for ${mailbox}:`, err);
+        return [];
+    }
+}
+
+/**
+ * Fetch a single full message from MongoDB.
+ */
+async function getMessageFromMongo(mailbox: string, id: string): Promise<any | null> {
+    if (!db) return null;
+    try {
+        const doc = await db.collection('saved_emails').findOne({ mailbox, messageId: id });
+        if (!doc) return null;
+
+        const hydratedAttachments = await hydrateAttachments(doc.attachments || []);
+
+        return {
+            id: doc.messageId,
+            from: typeof doc.from === 'object' ? doc.from?.text || doc.from?.value?.[0]?.address : doc.from,
+            to: mailbox,
+            subject: doc.subject,
+            date: doc.date instanceof Date ? doc.date.toISOString() : doc.date,
+            html: doc.html,
+            text: doc.text,
+            hasAttachment: hydratedAttachments.length > 0,
+            attachments: hydratedAttachments,
+        };
+    } catch (err) {
+        console.error(`MongoDB getMessage failed for ${mailbox}/${id}:`, err);
+        return null;
+    }
+}
+
+/**
+ * Delete a message from MongoDB (and clean up its GridFS files).
+ */
+async function deleteMessageFromMongo(mailbox: string, id: string): Promise<boolean> {
+    if (!db) return false;
+    try {
+        const doc = await db.collection('saved_emails').findOne({ mailbox, messageId: id });
+        if (!doc) return false;
+
+        // Clean up GridFS attachments first
+        if (doc.attachments && doc.attachments.length > 0) {
+            await Promise.allSettled(
+                doc.attachments
+                    .filter((att: any) => att.gridfs_id || att.gridfsId)
+                    .map(async (att: any) => {
+                        const gfsId = att.gridfs_id || att.gridfsId;
+                        try {
+                            await gfs.delete(typeof gfsId === 'string' ? new ObjectId(gfsId) : gfsId);
+                        } catch (err) {
+                            console.warn(`Could not delete GridFS file ${gfsId}:`, err);
+                        }
+                    })
+            );
+        }
+
+        await db.collection('saved_emails').deleteOne({ mailbox, messageId: id });
+        return true;
+    } catch (err) {
+        console.error(`MongoDB deleteMessage failed for ${mailbox}/${id}:`, err);
+        return false;
+    }
+}
+
+// ---------------------------------------------------------------
+// Core mailbox operations
+// ---------------------------------------------------------------
+
+export async function getInbox(
+    mailbox: string,
+    plan: 'pro' | 'free' | 'anonymous'
+): Promise<Array<object>> {
     console.log(`getting mailbox summaries for ${mailbox} on plan ${plan}`);
-    
-    // 1. Fetch from the user's current plan (e.g., 'free' or 'pro')
+
     const indexKey = `maildrop:${plan}:${mailbox}:index`;
     const dataKey = `maildrop:${plan}:${mailbox}:data`;
 
     try {
-        let messageIds = await client.zRange(indexKey, 0, -1, { REV: true });
         let rawResults: string[] = [];
 
+        // 1. Fetch from Redis (current plan)
+        const messageIds = await client.zRange(indexKey, 0, -1, { REV: true });
         if (messageIds && messageIds.length > 0) {
             const planResults = await client.hmGet(dataKey, messageIds);
             rawResults = rawResults.concat(planResults.filter((r): r is string => r !== null));
         }
 
-        // 2. FALLBACK: If user is logged in (not anonymous), ALSO fetch from 'anonymous' storage.
-        // This covers cases where SMTP saved as anonymous before the user claimed the inbox.
+        // 2. Fallback: anonymous storage (for emails received before user claimed inbox)
         if (plan !== 'anonymous') {
             const anonIndex = `maildrop:anonymous:${mailbox}:index`;
             const anonData = `maildrop:anonymous:${mailbox}:data`;
-            
             const anonIds = await client.zRange(anonIndex, 0, -1, { REV: true });
             if (anonIds && anonIds.length > 0) {
                 const anonResults = await client.hmGet(anonData, anonIds);
@@ -64,112 +202,134 @@ export async function getInbox(mailbox: string, plan: 'pro' | 'free' | 'anonymou
             }
         }
 
-        if (rawResults.length === 0) {
-            return [];
+        // 3. MongoDB fallback for pro users — catches emails Redis has evicted
+        let mongoResults: any[] = [];
+        if (plan === 'pro') {
+            mongoResults = await getInboxFromMongo(mailbox);
         }
 
-        // 3. Parse, Map, Deduplicate (by ID), and Sort by Date
-        const parsedMessages = rawResults
-            .map((result: string) => {
-                const message = JSON.parse(result);
-                return {
-                    id: message.id, 
-                    from: message.from, 
-                    to: message.to,
-                    subject: message.subject, 
-                    date: message.date, 
-                    hasAttachment: message.hasAttachment,
-                    wasAttachmentStripped: !!message.wasAttachmentStripped,
-                };
-            });
+        // 4. Parse Redis results
+        const parsedFromRedis = rawResults.map((result: string) => {
+            const message = JSON.parse(result);
+            return {
+                id: message.id,
+                from: message.from,
+                to: message.to,
+                subject: message.subject,
+                date: message.date,
+                hasAttachment: message.hasAttachment,
+                wasAttachmentStripped: !!message.wasAttachmentStripped,
+                _source: 'redis',
+            };
+        });
 
-        // Remove duplicates (in case migration ran partially and ID exists in both places)
-        const uniqueMessages = Array.from(new Map(parsedMessages.map(item => [item.id, item])).values());
+        // 5. Merge and deduplicate — Redis wins on conflict (it's more fresh)
+        const redisIds = new Set(parsedFromRedis.map(m => m.id));
+        const mongoOnly = mongoResults.filter(m => !redisIds.has(m.id));
+        const merged = [...parsedFromRedis, ...mongoOnly];
 
-        // Sort descending by date (newest first)
-        return uniqueMessages.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+        // 6. Remove internal markers and sort descending
+        return merged
+            .map(({ _source, ...rest }) => rest)
+            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     } catch (error) {
-        console.error(`Error in getInbox on ${mailbox} (${plan}):`, error);
-        throw new Error('Failed to retrieve messages from Redis');
+        console.error(`Error in getInbox for ${mailbox} (${plan}):`, error);
+        throw new Error('Failed to retrieve messages');
     }
 }
 
-/**
- * Gets a single, complete message object by its ID.
- * FIX: Checks fallback anonymous storage if not found in current plan.
- */
-export async function getMessage(mailbox: string, id: string, plan: 'pro' | 'free' | 'anonymous'): Promise<any> {
+export async function getMessage(
+    mailbox: string,
+    id: string,
+    plan: 'pro' | 'free' | 'anonymous'
+): Promise<any> {
     console.log(`getting message ${id} from mailbox ${mailbox} on plan ${plan}`);
     const dataKey = `maildrop:${plan}:${mailbox}:data`;
 
     try {
-        // 1. Try fetching from current plan
+        // 1. Try Redis (current plan)
         let messageStr = await client.hGet(dataKey, id);
-        
-        // 2. Fallback: Try fetching from anonymous if not found
+
+        // 2. Try Redis anonymous fallback
         if (!messageStr && plan !== 'anonymous') {
             const anonDataKey = `maildrop:anonymous:${mailbox}:data`;
             messageStr = await client.hGet(anonDataKey, id);
         }
 
-        if (!messageStr) {
-            return null;
-        }
-        
-        let message = JSON.parse(messageStr);
-
-        if (message.attachments && message.attachments.length > 0) {
-            for (const att of message.attachments) {
-                if (att.gridfs_id) {
-                    const downloadStream = gfs.openDownloadStream(new ObjectId(att.gridfs_id));
-                    const chunks: Buffer[] = [];
-                    for await (const chunk of downloadStream) {
-                        chunks.push(chunk);
-                    }
-                    att.content = Buffer.concat(chunks).toString('base64');
-                    delete att.gridfs_id;
-                }
+        // 3. If found in Redis, hydrate attachments and return
+        if (messageStr) {
+            const message = JSON.parse(messageStr);
+            if (message.attachments && message.attachments.length > 0) {
+                message.attachments = await hydrateAttachments(message.attachments);
             }
+            return message;
         }
-        return message;
+
+        // 4. MongoDB fallback for pro users only
+        if (plan === 'pro') {
+            return await getMessageFromMongo(mailbox, id);
+        }
+
+        return null;
     } catch (error) {
         console.error(`Error getting message ${id} (${plan}):`, error);
-        throw new Error('Failed to retrieve message from Redis');
+        throw new Error('Failed to retrieve message');
     }
 }
 
-/**
- * Deletes a message by its ID.
- * FIX: Checks fallback anonymous storage if not found in current plan.
- */
-export async function deleteMessageById(mailbox: string, id: string, plan: 'pro' | 'free' | 'anonymous'): Promise<boolean> {
+export async function deleteMessageById(
+    mailbox: string,
+    id: string,
+    plan: 'pro' | 'free' | 'anonymous'
+): Promise<boolean> {
     console.log(`deleting message ${id} from mailbox ${mailbox} on plan ${plan}`);
     const indexKey = `maildrop:${plan}:${mailbox}:index`;
     const dataKey = `maildrop:${plan}:${mailbox}:data`;
 
     try {
-        // 1. Try deleting from current plan
+        // 1. Try Redis (current plan) — also clean up GridFS if attachment exists
+        const messageStr = await client.hGet(dataKey, id);
+        if (messageStr) {
+            try {
+                const msg = JSON.parse(messageStr);
+                if (msg.attachments) {
+                    await Promise.allSettled(
+                        msg.attachments
+                            .filter((att: any) => att.gridfs_id)
+                            .map((att: any) =>
+                                gfs.delete(new ObjectId(att.gridfs_id)).catch(() => { })
+                            )
+                    );
+                }
+            } catch (_) { }
+        }
+
         const [, hdelResult] = await client.multi()
             .zRem(indexKey, id)
             .hDel(dataKey, id)
             .exec();
-        
+
         let deleted = Number(hdelResult) > 0;
 
-        // 2. Fallback: Try deleting from anonymous if not found in current plan
+        // 2. Anonymous fallback
         if (!deleted && plan !== 'anonymous') {
             const anonIndex = `maildrop:anonymous:${mailbox}:index`;
             const anonData = `maildrop:anonymous:${mailbox}:data`;
-            
             const [, anonHdelResult] = await client.multi()
                 .zRem(anonIndex, id)
                 .hDel(anonData, id)
                 .exec();
-            
             deleted = Number(anonHdelResult) > 0;
         }
-        
+
+        // 3. Delete from MongoDB too if this is a pro user
+        // (keeps both stores in sync regardless of where the delete originated)
+        if (plan === 'pro') {
+            const mongoDeleted = await deleteMessageFromMongo(mailbox, id);
+            deleted = deleted || mongoDeleted;
+        }
+
         return deleted;
     } catch (error) {
         console.error(`Error deleting message ${id} (${plan}):`, error);
@@ -178,9 +338,9 @@ export async function deleteMessageById(mailbox: string, id: string, plan: 'pro'
 }
 
 export function encryptMailbox(mailbox: string): string {
-  const num = bigInt(mailbox.toLowerCase().replace(/[^0-9a-z]/gi, ''), 36);
-  const encryptedNum = bigInt(`1${num.toString().split("").reverse().join("")}`).add(ALTINBOX_MOD);
-  return `D-${encryptedNum.toString(36)}`;
+    const num = bigInt(mailbox.toLowerCase().replace(/[^0-9a-z]/gi, ''), 36);
+    const encryptedNum = bigInt(`1${num.toString().split("").reverse().join("")}`).add(ALTINBOX_MOD);
+    return `D-${encryptedNum.toString(36)}`;
 }
 
 export async function listHandler(req: any, res: any): Promise<any> {
@@ -201,14 +361,11 @@ export async function listHandler(req: any, res: any): Promise<any> {
             encryptedMailbox: encryptMailbox(mailbox),
         });
     } catch (reason: any) {
-        console.log(`error for ${ip} : ${reason}`);
+        console.error(`listHandler error for ${ip}:`, reason);
         return res.status(500).set({
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Credentials': 'true',
-        }).json({
-            success: false, message: "An error occurred.",
-            errorDetails: reason.toString(),
-        });
+        }).json({ success: false, message: "An error occurred.", errorDetails: reason.toString() });
     }
 }
 
@@ -223,23 +380,17 @@ export async function messageHandler(req: any, res: any): Promise<any> {
         const messageData = await getMessage(mailbox, id, plan);
 
         if (!messageData) {
-            return res.status(200).json({
-                success: false, message: "Message not found in your current plan.",
-            });
+            return res.status(200).json({ success: false, message: "Message not found." });
         }
-        
+
         return res.status(200).set({
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Credentials': 'true',
-        }).json({
-            success: true, message: "Message retrieved successfully.",
-            data: messageData,
-        });
+        }).json({ success: true, message: "Message retrieved successfully.", data: messageData });
     } catch (reason: any) {
-        console.log(`error for ${ip} : ${reason}`);
+        console.error(`messageHandler error for ${ip}:`, reason);
         return res.status(500).json({
-            success: false, message: "An error occurred while retrieving the message.",
-            errorDetails: reason.toString(),
+            success: false, message: "An error occurred.", errorDetails: reason.toString(),
         });
     }
 }
@@ -249,28 +400,21 @@ export async function deleteHandler(req: any, res: any): Promise<any> {
     const mailbox = req.params.name;
     const id = req.params.id;
     const plan = getPlanFromRequest(req);
-    
+
     try {
         await ratelimit(ip);
         const deleted = await deleteMessageById(mailbox, id, plan);
 
         if (!deleted) {
-            return res.status(200).json({
-                success: false, message: "Message not found or already deleted.",
-            });
+            return res.status(200).json({ success: false, message: "Message not found or already deleted." });
         }
 
         return res.status(200).set({
             'Access-Control-Allow-Origin': '*',
             'Access-Control-Allow-Credentials': 'true',
-        }).json({
-            success: true, message: "Message deleted successfully.",
-        });
+        }).json({ success: true, message: "Message deleted successfully." });
     } catch (reason: any) {
-        console.log(`error for ${ip} : ${reason}`);
-        return res.status(500).json({
-            success: false, message: "Failed to delete message.",
-            errorDetails: reason.toString(),
-        });
+        console.error(`deleteHandler error for ${ip}:`, reason);
+        return res.status(500).json({ success: false, message: "Failed to delete message.", errorDetails: reason.toString() });
     }
 }
