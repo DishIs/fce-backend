@@ -54,9 +54,9 @@ async function logPaymentEvent(
     transactionType,
     provider: 'paypal',
     subscriptionId,
-    amount:   payload.amount,
+    amount: payload.amount,
     currency: payload.currency,
-    details:  payload.rawEvent,
+    details: payload.rawEvent,
     createdAt: new Date(),
   };
   await db.collection('payment_logs').insertOne(log);
@@ -94,18 +94,23 @@ export async function handlePayPalSubscriptionEvent(req: Request, res: Response)
       // ——————————————————————————————————————————
       case 'ACTIVATED': {
         const subscriptionData: ISubscription = {
-          provider:     'paypal',
+          provider: 'paypal',
           subscriptionId,
-          planId:       payload.planId,
-          status:       'ACTIVE',
-          startTime:    payload.startTime ?? new Date().toISOString(),
-          payerEmail:   payload.payerEmail,
-          payerName:    payload.payerName,
-          lastUpdated:  new Date(),
+          planId: payload.planId,
+          status: 'ACTIVE',
+          startTime: payload.startTime ?? new Date().toISOString(),
+          payerEmail: payload.payerEmail,
+          payerName: payload.payerName,
+          lastUpdated: new Date(),
         };
 
         await db.collection('users').updateOne(
-          { wyiUserId: userId },
+          {
+            $or: [
+              { wyiUserId: userId },
+              { linkedProviderIds: userId },
+            ]
+          },
           { $set: { plan: 'pro', subscription: subscriptionData } }
         );
         await logPaymentEvent(userId, subscriptionId, 'subscription_created', payload);
@@ -117,7 +122,12 @@ export async function handlePayPalSubscriptionEvent(req: Request, res: Response)
       case 'CANCELLED':
       case 'EXPIRED': {
         await db.collection('users').updateOne(
-          { wyiUserId: userId },
+          {
+            $or: [
+              { wyiUserId: userId },
+              { linkedProviderIds: userId },
+            ]
+          },
           {
             $set: {
               plan: 'free',
@@ -136,7 +146,12 @@ export async function handlePayPalSubscriptionEvent(req: Request, res: Response)
         // Payment failed — grace period before full cancellation.
         // Keep plan as 'pro' but flag the subscription as suspended.
         await db.collection('users').updateOne(
-          { wyiUserId: userId },
+          {
+            $or: [
+              { wyiUserId: userId },
+              { linkedProviderIds: userId },
+            ]
+          },
           {
             $set: {
               'subscription.status': 'SUSPENDED',
@@ -152,11 +167,16 @@ export async function handlePayPalSubscriptionEvent(req: Request, res: Response)
       // ——————————————————————————————————————————
       case 'UPDATED': {
         await db.collection('users').updateOne(
-          { wyiUserId: userId },
+          {
+            $or: [
+              { wyiUserId: userId },
+              { linkedProviderIds: userId },
+            ]
+          },
           {
             $set: {
-              'subscription.planId':      payload.planId,
-              'subscription.status':      (payload.status ?? 'ACTIVE') as ISubscription['status'],
+              'subscription.planId': payload.planId,
+              'subscription.status': (payload.status ?? 'ACTIVE') as ISubscription['status'],
               'subscription.lastUpdated': new Date(),
             },
           }
@@ -169,11 +189,16 @@ export async function handlePayPalSubscriptionEvent(req: Request, res: Response)
       case 'PAYMENT_COMPLETED': {
         // Successful renewal — ensure plan is still PRO and subscription is ACTIVE
         await db.collection('users').updateOne(
-          { wyiUserId: userId },
+          {
+            $or: [
+              { wyiUserId: userId },
+              { linkedProviderIds: userId },
+            ]
+          },
           {
             $set: {
               plan: 'pro',
-              'subscription.status':      'ACTIVE',
+              'subscription.status': 'ACTIVE',
               'subscription.lastUpdated': new Date(),
             },
           }
@@ -187,10 +212,15 @@ export async function handlePayPalSubscriptionEvent(req: Request, res: Response)
       case 'PAYMENT_FAILED': {
         // Do NOT immediately downgrade. Suspend and let CANCELLED/EXPIRED handle the final downgrade.
         await db.collection('users').updateOne(
-          { wyiUserId: userId },
+          {
+            $or: [
+              { wyiUserId: userId },
+              { linkedProviderIds: userId },
+            ]
+          },
           {
             $set: {
-              'subscription.status':      'SUSPENDED',
+              'subscription.status': 'SUSPENDED',
               'subscription.lastUpdated': new Date(),
             },
           }
