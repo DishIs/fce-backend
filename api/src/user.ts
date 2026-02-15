@@ -4,6 +4,23 @@ import { IUser, IUserSettings, ISubscription, IPaymentLog } from './mongo';
 import { v4 as uuidv4 } from 'uuid';
 import { Request, Response } from 'express';
 
+// ── Unwrap infinitely-nested { settings: { settings: { ... } } } ──────────────
+// Keeps unwrapping as long as the object has ONLY a single "settings" key,
+// which is the symptom of the double-nesting bug.
+function flattenSettings(raw: any): IUserSettings {
+    let obj = raw;
+    while (
+        obj &&
+        typeof obj === 'object' &&
+        Object.keys(obj).length === 1 &&
+        'settings' in obj
+    ) {
+        obj = obj.settings;
+    }
+    return (obj ?? {}) as IUserSettings;
+}
+
+
 // ── Updated getUser() helper ───────────────────────────────────────────────
 // Checks both wyiUserId (primary) AND linkedProviderIds (aliases).
 export async function getUser(userId: string): Promise<IUser | null> {
@@ -44,20 +61,20 @@ export async function getUserStatusHandler(req: Request, res: Response) {
 }
 
 export async function updateSettingsHandler(req: Request, res: Response) {
-    const { wyiUserId, ...settings } = req.body;
+    const { wyiUserId, ...rest } = req.body;
 
     if (!wyiUserId) {
         return res.status(400).json({ success: false, message: 'User ID required' });
     }
 
     try {
-        const settingsToUpdate = { ...settings } as IUserSettings;
+        // Normalize: unwrap any accidental nesting before saving
+        const settingsToUpdate = flattenSettings(rest);
 
-        // Update using $or to match either ID
         await db.collection('users').updateOne(
             {
                 $or: [
-                    { wyiUserId: wyiUserId },
+                    { wyiUserId },
                     { linkedProviderIds: wyiUserId }
                 ]
             },
@@ -80,7 +97,9 @@ export async function getSettingsHandler(req: Request, res: Response) {
 
     try {
         const user = await getUser(wyiUserId);
-        return res.status(200).json({ success: true, settings: user?.settings || {} });
+        // Always return a flat, normalized settings object — never the raw nested doc
+        const settings = flattenSettings(user?.settings ?? {});
+        return res.status(200).json({ success: true, settings });
     } catch (error) {
         return res.status(500).json({ success: false, message: 'Server error' });
     }
@@ -118,11 +137,8 @@ export async function upgradeUserSubscriptionHandler(req: Request, res: Response
             createdAt: new Date()
         };
 
-        // 1. Log the transaction
         await db.collection('payment_logs').insertOne(paymentLog);
 
-        // 2. Update User: Set Plan to PRO
-        // Use $or to ensure we find the user even if userId is a linked provider ID
         const updateResult = await db.collection('users').updateOne(
             {
                 $or: [
@@ -164,7 +180,6 @@ export async function upsertUserHandler(req: Request, res: Response) {
     try {
         const usersCollection = db.collection('users');
 
-        // 1. Check if this exact userId already exists (Primary ID check)
         const exactMatch = await usersCollection.findOne({ wyiUserId });
 
         if (exactMatch) {
@@ -183,13 +198,11 @@ export async function upsertUserHandler(req: Request, res: Response) {
             return res.status(200).json({ success: true, message: 'User synchronized successfully.' });
         }
 
-        // 2. No exact match — check if another account uses this email
         const emailMatch = await usersCollection.findOne({
             email: email.toLowerCase().trim(),
         });
 
         if (emailMatch) {
-            // Link the new provider ID to the existing account
             await usersCollection.updateOne(
                 { _id: emailMatch._id },
                 {
@@ -198,7 +211,7 @@ export async function upsertUserHandler(req: Request, res: Response) {
                         ...(emailMatch.name ? {} : { name }),
                     },
                     $addToSet: {
-                        linkedProviderIds: wyiUserId, // Add alias
+                        linkedProviderIds: wyiUserId,
                     }
                 }
             );
@@ -210,7 +223,7 @@ export async function upsertUserHandler(req: Request, res: Response) {
             });
         }
 
-        // 3. Truly new user
+        // Truly new user — $setOnInsert ensures defaults are only written once
         await usersCollection.updateOne(
             { wyiUserId },
             {
@@ -227,8 +240,8 @@ export async function upsertUserHandler(req: Request, res: Response) {
                     inboxHistory: [],
                     customDomains: [],
                     mutedSenders: [],
-                    settings: {},
-                    linkedProviderIds: [wyiUserId], // Initialize with self
+                    settings: {},          // flat empty object — never nested
+                    linkedProviderIds: [wyiUserId],
                 }
             },
             { upsert: true }
@@ -258,18 +271,16 @@ export async function addDomainHandler(req: any, res: any) {
         return res.status(403).json({ success: false, message: 'Permission denied.' });
     }
 
-    // Check if domain exists on ANY user (excluding current user)
     const existing = await db.collection('users').findOne({
         "customDomains.domain": normalizedDomain,
         "customDomains.verified": true,
-        _id: { $ne: user._id } // Use _id for exclusion to be safe
+        _id: { $ne: user._id }
     });
 
     if (existing) {
         return res.status(409).json({ success: false, message: 'This domain is already verified for another account.' });
     }
 
-    // Check if user already added it
     const alreadyExists = await db.collection('users').findOne({
         _id: user._id,
         "customDomains.domain": normalizedDomain
@@ -308,7 +319,6 @@ export async function muteSenderHandler(req: any, res: any) {
         { $addToSet: { mutedSenders: senderToMute.toLowerCase() } }
     );
 
-    // Use the canonical wyiUserId for Redis key consistency
     const userMuteListKey = `mutelist:${user.wyiUserId}`;
     await redisClient.sAdd(userMuteListKey, senderToMute.toLowerCase());
 
@@ -353,7 +363,6 @@ export async function getUserProfileHandler(req: Request, res: Response) {
         const user = await getUser(wyiUserId);
         if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
 
-        // Remove sensitive data manually since we fetched the whole user
         const { password, ...safeUser } = user as any;
 
         return res.status(200).json({ success: true, user: safeUser });
@@ -384,7 +393,7 @@ export async function getUserStorageHandler(req: Request, res: Response) {
 
         const totalBytes = result[0]?.totalBytes || 0;
         const emailCount = result[0]?.emailCount || 0;
-        const limitBytes = 5 * 1024 * 1024 * 1024; // 5GB
+        const limitBytes = 5 * 1024 * 1024 * 1024;
 
         function formatBytes(bytes: number): string {
             if (bytes === 0) return '0 Bytes';
@@ -399,7 +408,7 @@ export async function getUserStorageHandler(req: Request, res: Response) {
             storageUsed: totalBytes,
             storageLimit: limitBytes,
             percentUsed: (totalBytes / limitBytes * 100).toFixed(2),
-            emailCount: emailCount,
+            emailCount,
             storageUsedFormatted: formatBytes(totalBytes),
             storageLimitFormatted: '5 GB',
             storageRemaining: limitBytes - totalBytes,
