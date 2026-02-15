@@ -53,6 +53,87 @@ exports.shutdown = function () {
     if (mongoClient) mongoClient.close();
 };
 
+// ── OTP Extractor ─────────────────────────────────────────────────────────────
+// Checks subject first (faster, more reliable), then falls back to plain text.
+// Four layered patterns ordered by confidence.
+function extractOtp(subject, text) {
+    const sources = [subject, text].filter(Boolean);
+    for (const src of sources) {
+        // P1: keyword immediately before digits  ("Your code: 123456", "OTP is 456789")
+        let m = src.match(/(?:code|otp|verification|verify|pin|token|passcode|one.time)[^0-9]{0,15}(\b\d{4,8}\b)/i);
+        if (m) return m[1];
+
+        // P2: digits before keyword  ("123456 is your OTP", "456789 — verification code")
+        m = src.match(/\b(\d{4,8})\b[^0-9]{0,30}(?:code|otp|verification|verify|pin|token|passcode)/i);
+        if (m) return m[1];
+
+        // P3: standalone 6-digit number (most common OTP length)
+        m = src.match(/\b(\d{6})\b/);
+        if (m) return m[1];
+
+        // P4: standalone 4 or 8-digit number (bank PINs, backup codes)
+        m = src.match(/\b(\d{4}|\d{8})\b/);
+        if (m) return m[1];
+    }
+    return null;
+}
+
+// ── Verification / Magic Link Extractor ──────────────────────────────────────
+// Extracts the first URL whose href OR surrounding text matches verification keywords.
+// Works on both HTML (href attributes) and plain text (raw URLs).
+function extractVerificationLink(html, text) {
+    const verifyPattern = /verif|confirm|activat|validat|magic.link|click.here|complete|authenticate|auth|reset.password|unsubscri/i;
+
+    // 1. Parse href attributes from HTML — most reliable since the link text is nearby
+    if (html) {
+        const hrefRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+        let match;
+        while ((match = hrefRegex.exec(html)) !== null) {
+            const href = match[1];
+            const linkText = match[2].replace(/<[^>]+>/g, '').trim(); // strip inner tags
+            // Accept if URL itself or the link text looks like a verification link
+            if (verifyPattern.test(href) || verifyPattern.test(linkText)) {
+                // Filter out unsubscribe-only links unless nothing else found
+                if (!/unsubscri/i.test(href) && !/unsubscri/i.test(linkText)) {
+                    try { new URL(href); return href; } catch (_) { /* invalid URL, skip */ }
+                }
+            }
+        }
+
+        // Second pass: check the 100-char context window around each https link in HTML
+        const allHrefs = [...html.matchAll(/href=["']([^"']+)["']/gi)].map(m => m[1]);
+        for (const href of allHrefs) {
+            const idx = html.indexOf(href);
+            const ctx = html.slice(Math.max(0, idx - 100), idx + href.length + 100);
+            if (verifyPattern.test(ctx.replace(/<[^>]+>/g, ''))) {
+                try { new URL(href); return href; } catch (_) { /* skip */ }
+            }
+        }
+    }
+
+    // 2. Plain text fallback — look for URLs with verify-like path segments
+    if (text) {
+        const urlRegex = /https?:\/\/[^\s"'<>\]]+/g;
+        const urls = text.match(urlRegex) || [];
+        for (const url of urls) {
+            if (verifyPattern.test(url)) {
+                try { new URL(url); return url; } catch (_) { /* skip */ }
+            }
+        }
+
+        // Final pass: check 200-char context window around each URL in plain text
+        for (const url of urls) {
+            const idx = text.indexOf(url);
+            const ctx = text.slice(Math.max(0, idx - 200), idx + url.length + 200);
+            if (verifyPattern.test(ctx)) {
+                try { new URL(url); return url; } catch (_) { /* skip */ }
+            }
+        }
+    }
+
+    return null;
+}
+
 async function getUserData(recipientEmail) {
     if (!db || !redisClient.isOpen) return { plan: 'anonymous', userId: null, isVerified: false };
     
@@ -62,12 +143,10 @@ async function getUserData(recipientEmail) {
         
         if (cachedData) {
             const data = JSON.parse(cachedData);
-            // Ensure userId is converted back to ObjectId if it exists
             data.userId = data.userId ? new ObjectId(data.userId) : null;
             return data;
         }
 
-        // Use safe splitting
         const parts = recipientEmail.split('@');
         const recipientDomain = parts.length > 1 ? parts[1] : '';
         const ttl = parseInt(plugin.cfg.main.plan_cache_ttl, 10) || 3600;
@@ -75,7 +154,6 @@ async function getUserData(recipientEmail) {
         let user;
         let userData;
 
-        // 1. Check for Pro User with Verified Custom Domain
         user = await db.collection('users').findOne({
             plan: 'pro',
             'customDomains.domain': recipientDomain,
@@ -85,63 +163,41 @@ async function getUserData(recipientEmail) {
         if (user) {
             userData = { plan: 'pro', userId: user._id, isVerified: true };
             await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
-            return userData; // userId is already ObjectId
+            return userData;
         }
 
-        // 2. CRITICAL FIX: Check if this specific email exists in ANY Pro user's inboxes
-        // We look for a user where plan='pro' AND the inboxes array contains this email
-        user = await db.collection('users').findOne({ 
-            plan: 'pro', 
-            inboxes: recipientEmail 
-        });
-
+        user = await db.collection('users').findOne({ plan: 'pro', inboxes: recipientEmail });
         if (user) {
-            plugin.logdebug(`Found PRO user via inbox list for ${recipientEmail}`);
             userData = { plan: 'pro', userId: user._id, isVerified: false };
             await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
             return userData;
         }
 
-        // 3. Check for Free User with specific inbox
-        user = await db.collection('users').findOne({ 
-            plan: 'free', 
-            inboxes: recipientEmail 
-        });
-
+        user = await db.collection('users').findOne({ plan: 'free', inboxes: recipientEmail });
         if (user) {
             userData = { plan: 'free', userId: user._id, isVerified: false };
             await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
             return userData;
         }
 
-        // 4. Default to anonymous
         userData = { plan: 'anonymous', userId: null, isVerified: false };
         await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
         return userData;
 
     } catch (err) {
         plugin.logerror(`Error fetching user data for ${recipientEmail}: ${err}`);
-        // Default safe fallback
         return { plan: 'anonymous', userId: null, isVerified: false };
     }
 }
 
-/**
- * NEW: Check user's total storage usage for pro users
- */
 async function getUserStorageUsage(userId) {
     if (!db) return 0;
-    
     try {
         const result = await db.collection('saved_emails').aggregate([
             { $match: { userId: new ObjectId(userId) } },
             { $unwind: { path: "$attachments", preserveNullAndEmptyArrays: true } },
-            { $group: { 
-                _id: null, 
-                totalBytes: { $sum: { $ifNull: ["$attachments.size", 0] } }
-            }}
+            { $group: { _id: null, totalBytes: { $sum: { $ifNull: ["$attachments.size", 0] } } } }
         ]).toArray();
-        
         return result[0]?.totalBytes || 0;
     } catch (err) {
         plugin.logerror(`Error calculating storage usage for user ${userId}: ${err}`);
@@ -173,7 +229,7 @@ exports.tiered_save = async function (next, connection) {
                     mailbox_ttl: null,
                     attachment_limit: parseInt(plugin.cfg.main.pro_attachment_limit_mb, 10) * 1024 * 1024,
                     save_to_mongo: true,
-                    use_gridfs: true, // Pro users get GridFS
+                    use_gridfs: true,
                 };
             } else if (plan === 'free') {
                 cfg = {
@@ -181,28 +237,25 @@ exports.tiered_save = async function (next, connection) {
                     mailbox_ttl: parseInt(plugin.cfg.main.free_mailbox_ttl, 10),
                     attachment_limit: parseInt(plugin.cfg.main.free_attachment_limit_mb, 10) * 1024 * 1024,
                     save_to_mongo: false,
-                    use_gridfs: true, // NEW: Free users also get GridFS for 1MB attachments
+                    use_gridfs: true,
                 };
-            } else { // anonymous
+            } else {
                 cfg = {
                     mailbox_size: parseInt(plugin.cfg.main.anon_mailbox_size, 10),
                     mailbox_ttl: parseInt(plugin.cfg.main.anon_mailbox_ttl, 10),
                     attachment_limit: 0,
                     save_to_mongo: false,
-                    use_gridfs: false, // Anonymous users get nothing
+                    use_gridfs: false,
                 };
             }
 
-            // NEW: For pro users, check 5GB storage limit BEFORE processing attachments
-            const MAX_STORAGE_BYTES = 5 * 1024 * 1024 * 1024; // 5GB
+            const MAX_STORAGE_BYTES = 5 * 1024 * 1024 * 1024;
             let currentStorageUsage = 0;
-            
+
             if (plan === 'pro' && userId) {
                 currentStorageUsage = await getUserStorageUsage(userId);
-                
                 if (currentStorageUsage >= MAX_STORAGE_BYTES) {
-                    plugin.logwarn(`User ${userId} has reached 5GB storage limit (${currentStorageUsage} bytes). Stripping all attachments.`);
-                    // Force attachment limit to 0 to strip all attachments
+                    plugin.logwarn(`User ${userId} has reached 5GB storage limit. Stripping all attachments.`);
                     cfg.attachment_limit = 0;
                 }
             }
@@ -213,13 +266,11 @@ exports.tiered_save = async function (next, connection) {
             let totalNewAttachmentSize = 0;
 
             for (const att of (parsed.attachments || [])) {
-                // Check individual attachment size
                 if (att.size > cfg.attachment_limit) {
                     attachmentsRemoved = true;
                     continue;
                 }
 
-                // NEW: For pro users, check if adding this attachment would exceed 5GB limit
                 if (plan === 'pro' && userId) {
                     if (currentStorageUsage + totalNewAttachmentSize + att.size > MAX_STORAGE_BYTES) {
                         plugin.logwarn(`Attachment "${att.filename}" would exceed 5GB limit. Stripping.`);
@@ -229,19 +280,12 @@ exports.tiered_save = async function (next, connection) {
                     totalNewAttachmentSize += att.size;
                 }
 
-                // Use GridFS for pro AND free users (avoids base64 bloat)
                 if (cfg.use_gridfs && userId) {
                     const uploadStream = gfs.openUploadStream(att.filename, {
                         contentType: att.contentType,
-                        metadata: { 
-                            userId, 
-                            mailbox: destination,
-                            plan: plan, // Store plan for easier cleanup
-                            uploadedAt: new Date()
-                        }
+                        metadata: { userId, mailbox: destination, plan, uploadedAt: new Date() }
                     });
-                    
-                    // Wait for upload to complete
+
                     await new Promise((resolve, reject) => {
                         const readStream = Readable.from(att.content);
                         readStream.pipe(uploadStream)
@@ -250,37 +294,45 @@ exports.tiered_save = async function (next, connection) {
                     });
 
                     attachmentsForRedis.push({
-                        filename: att.filename, 
-                        contentType: att.contentType, 
+                        filename: att.filename,
+                        contentType: att.contentType,
                         size: att.size,
                         gridfs_id: uploadStream.id.toString(),
                     });
-                    
                     attachmentsForMongo.push({
                         gridfs_id: uploadStream.id,
-                        filename: att.filename, 
-                        contentType: att.contentType, 
+                        filename: att.filename,
+                        contentType: att.contentType,
                         size: att.size
                     });
                 } else {
-                    // Anonymous users don't get attachments at all (attachment_limit = 0)
-                    // This branch should never execute for anonymous, but kept for safety
                     attachmentsForRedis.push({
-                        filename: att.filename, 
-                        contentType: att.contentType, 
+                        filename: att.filename,
+                        contentType: att.contentType,
                         size: att.size,
                         content: att.content.toString('base64'),
                     });
                 }
             }
-            
+
             if (attachmentsRemoved) {
-                const reason = (plan === 'pro' && currentStorageUsage >= MAX_STORAGE_BYTES) 
+                const reason = (plan === 'pro' && currentStorageUsage >= MAX_STORAGE_BYTES)
                     ? "You have reached your 5GB storage limit. Please delete old emails to receive new attachments."
                     : "One or more attachments were removed due to size limits for your plan.";
-                    
                 const notice = `<br><p><i>[${reason}]</i></p>`;
                 parsed.html = parsed.html ? parsed.html + notice : parsed.textAsHtml + notice;
+            }
+
+            // ── Pro-only: extract OTP and verification link ───────────────────────
+            let otp = null;
+            let verificationLink = null;
+
+            if (plan === 'pro') {
+                otp = extractOtp(parsed.subject, parsed.text);
+                verificationLink = extractVerificationLink(parsed.html || parsed.textAsHtml, parsed.text);
+
+                if (otp) plugin.logdebug(`OTP extracted for ${destination}: ${otp}`);
+                if (verificationLink) plugin.logdebug(`Verification link extracted for ${destination}`);
             }
 
             const messageId = shortid.generate();
@@ -298,28 +350,32 @@ exports.tiered_save = async function (next, connection) {
                 html: parsed.html || parsed.textAsHtml,
                 text: parsed.text,
                 attachments: attachmentsForRedis,
+                // Pro-only fields — null for free/anonymous, omitted cleanly below
+                ...(plan === 'pro' && { otp, verificationLink }),
             };
 
             if (cfg.save_to_mongo && userId) {
                 const mongoRecord = {
-                    userId, 
-                    mailbox: destination, 
-                    messageId: messageId,
-                    from: parsed.from, 
-                    to: parsed.to?.value, 
+                    userId,
+                    mailbox: destination,
+                    messageId,
+                    from: parsed.from,
+                    to: parsed.to?.value,
                     subject: parsed.subject,
-                    date: messageDate, 
-                    html: parsed.html, 
+                    date: messageDate,
+                    html: parsed.html,
                     text: parsed.text,
-                    attachments: attachmentsForMongo, 
+                    attachments: attachmentsForMongo,
                     headers: parsed.headers,
-                    storageUsed: totalNewAttachmentSize, // Track storage per email
+                    storageUsed: totalNewAttachmentSize,
+                    // Store for MongoDB fallback path
+                    ...(plan === 'pro' && { otp, verificationLink }),
                 };
                 db.collection('saved_emails').insertOne(mongoRecord).catch(err => {
                     plugin.logerror(`MongoDB insertOne failed for ${destination}: ${err}`);
                 });
             }
-            
+
             const indexKey = `maildrop:${plan}:${destination}:index`;
             const dataKey = `maildrop:${plan}:${destination}:data`;
 
@@ -330,9 +386,6 @@ exports.tiered_save = async function (next, connection) {
                 const numToRemove = (currentSize - cfg.mailbox_size) + 1;
                 const oldIds = await redisClient.zRange(indexKey, 0, numToRemove - 1);
                 if (oldIds && oldIds.length > 0) {
-                    plugin.logdebug(`Trimming ${oldIds.length} old messages from ${destination} (${plan})`);
-                    
-                    // NEW: For GridFS users, clean up old attachments when emails are removed
                     if (cfg.use_gridfs && userId) {
                         for (const oldId of oldIds) {
                             const oldMsg = await redisClient.hGet(dataKey, oldId);
@@ -342,9 +395,7 @@ exports.tiered_save = async function (next, connection) {
                                     if (msg.attachments && msg.attachments.length > 0) {
                                         for (const att of msg.attachments) {
                                             if (att.gridfs_id) {
-                                                // Delete from GridFS
                                                 await gfs.delete(new ObjectId(att.gridfs_id));
-                                                plugin.logdebug(`Deleted GridFS file ${att.gridfs_id} for old message ${oldId}`);
                                             }
                                         }
                                     }
@@ -354,12 +405,11 @@ exports.tiered_save = async function (next, connection) {
                             }
                         }
                     }
-                    
                     multi.zRem(indexKey, oldIds);
                     multi.hDel(dataKey, oldIds);
                 }
             }
-            
+
             multi.zAdd(indexKey, { score: messageTimestamp, value: messageId });
             multi.hSet(dataKey, messageId, JSON.stringify(fullMessage));
 
@@ -368,16 +418,19 @@ exports.tiered_save = async function (next, connection) {
                 multi.expire(dataKey, cfg.mailbox_ttl);
             }
 
+            // ── Publish WebSocket event — includes otp + verificationLink for pro ──
             multi.publish(`mailbox:events:${destination}`, JSON.stringify({
                 type: 'new_mail',
                 mailbox: destination,
-                plan: plan,
-                id: fullMessage.id, 
-                from: fullMessage.from, 
+                plan,
+                id: fullMessage.id,
+                from: fullMessage.from,
                 to: fullMessage.to,
-                subject: fullMessage.subject, 
+                subject: fullMessage.subject,
                 date: fullMessage.date,
-                hasAttachment: fullMessage.hasAttachment
+                hasAttachment: fullMessage.hasAttachment,
+                // Pro fields included in real-time event so client needs no API call
+                ...(plan === 'pro' && { otp, verificationLink }),
             }));
 
             await multi.exec();
