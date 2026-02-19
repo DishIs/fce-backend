@@ -26,28 +26,29 @@ Optional Authentication Token (if using a secured server).
   "message": "Mailbox retrieved successfully.",
   "data": [
     {
-      "id": "h7YSqaxFz",
-      "from": "\"Dishant Singh\"",
-      "to": "dishant",
-      "subject": "asdf",
-      "date": "2024-09-25T13:02:57.289Z"
+      "id": "wNp8N0KoV",
+      "from": "\"SendTestEmail\" <noreply@sendtestemail.com>",
+      "to": "maildrop@ditapi.info",
+      "subject": "SendTestEmail.com - Testing Email ID: 00eb36052b8d426c86fa57a88f0b6753",
+      "date": "2026-02-19T03:41:32.438Z",
+      "hasAttachment": false,
+      "wasAttachmentStripped": false,
+      "otp": null,
+      "verificationLink": null
     },
     {
-      "id": "ZNOOuid_0",
-      "from": "\"Dishant Singh\"",
-      "to": "dishant",
-      "subject": "sdf",
-      "date": "2024-09-25T12:45:17.006Z"
-    },
-    {
-      "id": "oxsToRzJX",
-      "from": "\"Dishant Singh\"",
-      "to": "dishant",
-      "subject": "hello man",
-      "date": "2024-09-25T10:15:26.248Z"
+      "id": "s9wDKspt-",
+      "from": "\"SendTestEmail\" <noreply@sendtestemail.com>",
+      "to": "maildrop@ditapi.info",
+      "subject": "SendTestEmail.com - Testing Email ID: 480b2992fe9f73b0e44f2b9cf7a8d681",
+      "date": "2026-02-19T03:41:00.159Z",
+      "hasAttachment": false,
+      "wasAttachmentStripped": false,
+      "otp": null,
+      "verificationLink": null
     }
   ],
-  "encryptedMailbox": "D-1qdvjaze"
+  "encryptedMailbox": "D-1tvd0i7g79sx52l1jui"
 }
 ```
 ### Successful Response (Empty Mailbox):
@@ -92,15 +93,17 @@ Optional Authentication Token (if using a secured server).
   "success": true,
   "message": "Message retrieved successfully.",
   "data": {
-    "id": "7122AUPOL",
-    "from": "dishant@kodewith.me",
-    "to": "rishika.singh",
-    "subject": "Testing SMTP connectivity!",
-    "date": "2024-09-25T06:10:24.271Z",
-    "body": "Received: from yourdomain.com (Unknown [127.0.0.1])\r\n\tby kodewith.me (Haraka/3.0.4) with SMTP id 9D13742E-7083-46B1-901A-058F2EB12C1A.1\r\n\tenvelope-from ;\r\n\tWed, 25 Sep 2024 06:10:14 +0000\r\nFrom: dishant@kodewith.me\r\nTo: rishika.singh@dishis.tech\r\nSubject: Testing SMTP connectivity!\r\nX-Mailer: Febooti Automation Workshop\r\nContent-Type: text/plain; charset=UTF-8\r\nDate: Tue, 17 Mar 2020 17:13:54 +0200\r\nX-Priority: 3 (normal)\r\n\r\nSMTP connectivity test\r\n(with logging session details to text file).\r\n\r\n---\r\nEmail sent with trial version\r\nof Automation Workshop 8.1.0\r\nVisit febooti.com to get full version\r\n",
-    "html": "<p>SMTP connectivity test<br>(with logging session details to text file).</p><hr><p>Email sent with trial version<br>of Automation Workshop 8.1.0<br>Visit febooti.com to get full version</p>"
-  },
-  "encryptedMailbox": "D-3670x23pe7gkt"
+    "id": "wNp8N0KoV",
+    "from": "\"SendTestEmail\" <noreply@sendtestemail.com>",
+    "to": "maildrop@ditapi.info",
+    "subject": "SendTestEmail.com - Testing Email ID: 00eb36052b8d426c86fa57a88f0b6753",
+    "date": "2026-02-19T03:41:32.438Z",
+    "hasAttachment": false,
+    "wasAttachmentStripped": false,
+    "html": "<html>\nCongratulations!<br><br>\nIf you are reading this your email address is working.<br><br>\nThis is not spam or a solicitation. This email was sent to your email address because you, or someone else, requested a test email to be sent to this address. We work hard to ensure a balance between testing, transparency, and privacy. If you did not request this email test, it's likely that someone accidentally mistyped their email address as yours. You can request your email address be blocked here: <a href=\"https://sendtestemail.com/block\">https://sendtestemail.com/block</a><br><br>\nThe IP address of the requester of this test email is: 103.175.29.180\n</html>",
+    "text": "If you are reading this your email address is working.\n\n\nThis is not spam or a solicitation. This email was sent to your email address because you, or someone else, requested a test email to be sent to this address. We work hard to ensure a balance between testing, transparency, and privacy. If you did not request this email test, it's likely that someone accidentally mistyped their email address as yours. You can request your email address be blocked here: https://sendtestemail.com/block\n\n\nThe IP address of the requester of this test email is: 103.175.29.180",
+    "attachments": []
+  }
 }
 ```
 ### Error Response (Message Not Found):
@@ -164,8 +167,8 @@ Fetches server health statistics, providing insight into the number of queued an
   "success": true,
   "message": "Stats retrieved successfully.",
   "data": {
-    "queued": 6,
-    "denied": 35
+    "queued": 1545377,
+    "denied": 121499
   }
 }
 ```
