@@ -1,6 +1,6 @@
 [Live Site](https://freecustom.email)
 [Buy API](https://rapidapi.com/dishis-technologies-maildrop/api/temp-mail-maildrop1)
-# Advanced Server API Documentation
+# Temp Mail API Documentation
 This document provides detailed information on your mail server's API endpoints, expected responses, and encryption methodologies. The API is designed for efficient mailbox management, including retrieving messages, checking server health, and handling encrypted mailbox identifiers.
 
 **Send Mail on: {name}@kodewith.me**
