@@ -22,6 +22,7 @@ import {
 import { deleteDomainHandler, getDashboardDataHandler, verifyDomainHandler } from './domain-handler';
 import { addInboxHandler } from './inbox-handler';
 import { handlePayPalSubscriptionEvent } from './paypal-handler';
+import { domainsHandler } from './domains';
 
 dotenv.config();
 
@@ -90,6 +91,7 @@ connectToMongo().then(() => {
   // ✅ NEW: PayPal Webhook event relay (called from Next.js webhook route)
   app.post('/paypal/subscription-event', handlePayPalSubscriptionEvent);
 
+  app.get('/domains', domainsHandler);
 
   // Health
   app.get('/health', statsHandler);
