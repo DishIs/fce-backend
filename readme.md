@@ -3,7 +3,7 @@
 # Temp Mail API Documentation
 This document provides detailed information on your mail server's API endpoints, expected responses, and encryption methodologies. The API is designed for efficient mailbox management, including retrieving messages, checking server health, and handling encrypted mailbox identifiers.
 
-**Send Mail on: {name}@kodewith.me**
+**Send Mail on: {name}@ditapi.info**
 
 ## 1. GET /mailbox/{name}
 **Purpose:**
