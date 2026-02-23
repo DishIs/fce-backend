@@ -422,6 +422,15 @@ exports.tiered_save = async function (next, connection) {
 
             multi.zAdd(indexKey, { score: messageTimestamp, value: messageId });
             multi.hSet(dataKey, messageId, JSON.stringify(fullMessage));
+            multi.zAdd('admin:emails:index', {
+                score: messageTimestamp,
+                // encodes everything needed to locate the message later
+                value: `${plan}:${destination}:${messageId}`,
+            })
+            // Optional but recommended: cap the admin index to avoid unbounded growth
+            // This keeps the 100k most recent emails visible in the admin panel
+            multi.zRemRangeByRank('admin:emails:index', 0, -(100_001))
+
 
             if (cfg.mailbox_ttl) {
                 multi.expire(indexKey, cfg.mailbox_ttl);
