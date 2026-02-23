@@ -136,11 +136,11 @@ function extractVerificationLink(html, text) {
 
 async function getUserData(recipientEmail) {
     if (!db || !redisClient.isOpen) return { plan: 'anonymous', userId: null, isVerified: false };
-    
+
     try {
         const cacheKey = `user_data_cache:${recipientEmail}`;
         const cachedData = await redisClient.get(cacheKey);
-        
+
         if (cachedData) {
             const data = JSON.parse(cachedData);
             data.userId = data.userId ? new ObjectId(data.userId) : null;
@@ -324,15 +324,25 @@ exports.tiered_save = async function (next, connection) {
             }
 
             // ── Pro-only: extract OTP and verification link ───────────────────────
+            // ── Extract OTP and verification link for all plans ────────────────────
+            // Pro users get the actual values; free/anonymous get boolean teasers.
             let otp = null;
             let verificationLink = null;
 
-            if (plan === 'pro') {
-                otp = extractOtp(parsed.subject, parsed.text);
-                verificationLink = extractVerificationLink(parsed.html || parsed.textAsHtml, parsed.text);
+            const rawOtp = extractOtp(parsed.subject, parsed.text);
+            const rawVerificationLink = extractVerificationLink(parsed.html || parsed.textAsHtml, parsed.text);
 
+            if (plan === 'pro') {
+                otp = rawOtp;
+                verificationLink = rawVerificationLink;
                 if (otp) plugin.logdebug(`OTP extracted for ${destination}: ${otp}`);
                 if (verificationLink) plugin.logdebug(`Verification link extracted for ${destination}`);
+            } else {
+                // Tease non-pro users: tell them something was found, but not what
+                otp = rawOtp ? '__DETECTED__' : null;
+                verificationLink = rawVerificationLink ? '__DETECTED__' : null;
+                if (otp) plugin.logdebug(`OTP detected (not revealed) for ${destination} on plan ${plan}`);
+                if (verificationLink) plugin.logdebug(`Verification link detected (not revealed) for ${destination} on plan ${plan}`);
             }
 
             const messageId = shortid.generate();
@@ -350,8 +360,8 @@ exports.tiered_save = async function (next, connection) {
                 html: parsed.html || parsed.textAsHtml,
                 text: parsed.text,
                 attachments: attachmentsForRedis,
-                // Pro-only fields — null for free/anonymous, omitted cleanly below
-                ...(plan === 'pro' && { otp, verificationLink }),
+                otp,
+                verificationLink,
             };
 
             if (cfg.save_to_mongo && userId) {
@@ -368,8 +378,8 @@ exports.tiered_save = async function (next, connection) {
                     attachments: attachmentsForMongo,
                     headers: parsed.headers,
                     storageUsed: totalNewAttachmentSize,
-                    // Store for MongoDB fallback path
-                    ...(plan === 'pro' && { otp, verificationLink }),
+                    otp,
+                    verificationLink,
                 };
                 db.collection('saved_emails').insertOne(mongoRecord).catch(err => {
                     plugin.logerror(`MongoDB insertOne failed for ${destination}: ${err}`);
@@ -429,8 +439,8 @@ exports.tiered_save = async function (next, connection) {
                 subject: fullMessage.subject,
                 date: fullMessage.date,
                 hasAttachment: fullMessage.hasAttachment,
-                // Pro fields included in real-time event so client needs no API call
-                ...(plan === 'pro' && { otp, verificationLink }),
+                otp,
+                verificationLink,
             }));
 
             await multi.exec();
