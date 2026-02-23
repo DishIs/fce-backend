@@ -21,7 +21,6 @@ import {
 } from './user';
 import { deleteDomainHandler, getDashboardDataHandler, verifyDomainHandler } from './domain-handler';
 import { addInboxHandler } from './inbox-handler';
-import { handlePayPalSubscriptionEvent } from './paypal-handler';
 import { domainsHandler } from './domains';
 import { handlePaddleSubscriptionEvent } from './paddle-handler';
 
@@ -88,9 +87,6 @@ connectToMongo().then(() => {
 
   // Billing (Internal/NextJS callback)
   app.post('/user/upgrade', upgradeUserSubscriptionHandler); // NEW: Upgrade to Pro
-
-  // ✅ NEW: PayPal Webhook event relay (called from Next.js webhook route)
-  app.post('/paypal/subscription-event', handlePayPalSubscriptionEvent);
 
   // Paddle webhook event relay
   app.post('/paddle/subscription-event', handlePaddleSubscriptionEvent);
