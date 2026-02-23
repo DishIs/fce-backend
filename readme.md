@@ -3,18 +3,18 @@
 # Temp Mail API Documentation
 This document provides detailed information on your mail server's API endpoints, expected responses, and encryption methodologies. The API is designed for efficient mailbox management, including retrieving messages, checking server health, and handling encrypted mailbox identifiers.
 
-**Send Mail on: {name}@ditapi.info**
+**Send Mail on: any@ditapi.info**
 
-## 1. GET /mailbox/{name}
+## 1. GET /mailbox/{email}
 **Purpose:**
 
 Retrieve all messages in the mailbox of a specific user.
 
 **Request:**
-- URL: `/mailbox/{name}`
+- URL: `/mailbox/{email}`
 - Method: GET
 - Path Parameter:
-- `{name}`: The mailbox name, usually a username or alias.
+- `{email}`: The mailbox address with domain.
 
 **Headers:**
 - *Content-Type: application/json*
@@ -69,18 +69,18 @@ Optional Authentication Token (if using a secured server).
 - `date`: The timestamp when the email was received (in ISO 8601 format).
 - `encryptedMailbox`: A unique, encrypted identifier for the mailbox, used for security purposes.
 
-## 2. GET /mailbox/{name}/message/{id}
+## 2. GET /mailbox/{email}/message/{id}
 **Purpose:**
 
 Retrieve a specific email message from the user's mailbox by its unique identifier.
 
 **Request:**
-- URL: /mailbox/{name}/message/{id}
+- URL: /mailbox/{email}/message/{id}
 - Method: GET
 
 **Path Parameters:**
 
-- {name}: The name of the mailbox.
+- {email}: The address of the mailbox.
 - {id}: The unique identifier of the email message.
 
 **Headers:**
@@ -128,11 +128,11 @@ Optional Authentication Token (if using a secured server).
 Deletes a specific email message from the user's mailbox.
 
 **Request:**
-- URL: `/mailbox/{name}/message/{id}`
+- URL: `/mailbox/{email}/message/{id}`
 - Method: DELETE
 
 **Path Parameters:**
-- {name}: The name of the mailbox.
+- {name}: The address of the mailbox.
 - {id}: The unique identifier of the email message.
 
 **Headers:**
