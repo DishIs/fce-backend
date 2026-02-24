@@ -17,8 +17,9 @@ const INTERVAL_MS = parseInt(process.env.REDIS_CLEANUP_INTERVAL_MS || '', 10)
                     || 6 * 60 * 60 * 1000; // default 6h
 
 const MAX_TTL: Record<string, number> = {
-    anon: 10 * 60 * 60, // 10h
-    free: 24 * 60 * 60, // 24h
+    anon:      10 * 60 * 60, // 10h (short alias, just in case)
+    anonymous: 10 * 60 * 60, // 10h (actual plan string used in queue plugin)
+    free:      24 * 60 * 60, // 24h
 };
 
 interface SweepCounts {
@@ -58,7 +59,7 @@ async function runSweep(
                 continue;
             }
 
-            if (!['anon', 'free'].includes(plan)) {
+            if (!['anon', 'anonymous', 'free'].includes(plan)) {
                 console.warn(`Unknown plan '${plan}': ${key} — skipping`);
                 counts.skipped++;
                 continue;
