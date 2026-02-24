@@ -26,6 +26,7 @@ interface SweepCounts {
     deleted: number;
     orphan:  number;
     skipped: number;
+    fixed:   number; // Keys that had their TTL clamped instead of deleted
     error:   number;
 }
 
@@ -37,12 +38,13 @@ async function runSweep(
 ): Promise<void> {
     console.log('\n' + '='.repeat(60));
     console.log(`Redis Key Cleanup — ${new Date().toISOString()}`);
-    console.log(`Mode: ${dryRun ? 'DRY RUN (no deletes)' : 'LIVE'}`);
+    console.log(`Mode: ${dryRun ? 'DRY RUN (no changes)' : 'LIVE'}`);
     console.log('='.repeat(60));
 
-    const seen: Set<string>  = new Set();
-    const counts: SweepCounts = { deleted: 0, orphan: 0, skipped: 0, error: 0 };
+    const seen: Set<string>   = new Set();
+    const counts: SweepCounts = { deleted: 0, orphan: 0, skipped: 0, fixed: 0, error: 0 };
 
+    // Use scanIterator to avoid blocking Redis on large datasets
     for await (const key of redis.scanIterator({ MATCH: 'maildrop:*', COUNT: 500 })) {
         if (seen.has(key)) continue;
         seen.add(key);
@@ -66,9 +68,11 @@ async function runSweep(
             }
 
             // ── Orphan check: every index must have a data sibling ────────────
+            // If we find 'maildrop:anon:xyz:index', ensure 'maildrop:anon:xyz:data' exists
             const base       = key.replace(/:(?:index|data)$/, '');
             const siblingKey = keyType === 'index' ? `${base}:data` : `${base}:index`;
 
+            // Optimization: if we haven't scanned the sibling yet, check existence
             if (!seen.has(siblingKey)) {
                 const siblingExists = await redis.exists(siblingKey);
                 if (!siblingExists) {
@@ -85,12 +89,21 @@ async function runSweep(
 
             if (ttl === -2) continue; // evaporated between scan and TTL check
 
+            // Case 1: Key has NO expiry (bug) OR has TOO MUCH time remaining (created with wrong default)
+            // We do NOT delete these; we simply clamp the TTL to the policy limit.
             if (ttl === -1 || ttl > maxTtl) {
                 const reason = ttl === -1 ? 'no TTL' : `TTL ${ttl}s > max ${maxTtl}s`;
-                console.log(`[stale]   ${key}  (${reason})`);
-                if (!dryRun) await redis.del(key);
-                counts.deleted++;
-            } else {
+                
+                console.log(`[clamp]   ${key}  (${reason} -> set to ${maxTtl}s)`);
+                
+                if (!dryRun) {
+                    // Update the expiry to the policy max without deleting data
+                    await redis.expire(key, maxTtl);
+                }
+                counts.fixed++;
+            } 
+            else {
+                // TTL is within valid range
                 counts.skipped++;
             }
 
@@ -103,8 +116,8 @@ async function runSweep(
     // ── Summary ───────────────────────────────────────────────────────────────
     console.log('\n' + '-'.repeat(60));
     console.log(`Scanned:          ${seen.size.toLocaleString()} keys`);
-    console.log(`Deleted (stale):  ${counts.deleted.toLocaleString()}`);
     console.log(`Deleted (orphan): ${counts.orphan.toLocaleString()}`);
+    console.log(`Fixed (TTL clamp):${counts.fixed.toLocaleString()}`);
     console.log(`Skipped (ok/pro): ${counts.skipped.toLocaleString()}`);
     console.log(`Errors:           ${counts.error}`);
     console.log('='.repeat(60) + '\n');
