@@ -104,16 +104,33 @@ services:
       # Revoke after this many consecutive failing sweeps (guards DNS flaps)
       FAILURE_THRESHOLD: 2
       OUR_MX_SUFFIX: mx.freecustom.email
-      SMTP_HOST: smtp.zoho.in          # or SES/Postmark/Resend SMTP host
+      SMTP_HOST: smtp.zoho.in # or SES/Postmark/Resend SMTP host
       SMTP_PORT: 587
       SMTP_USER: no-reply@freecustom.email
       SMTP_PASS: ${SMTP_PASS}
       MAIL_FROM: '"FreeCustom.Email" <no-reply@freecustom.email>'
       APP_URL: https://www.freecustom.email
-      MAIL_DISABLED: "true"             # flip to "true" in staging
+      MAIL_DISABLED: "true" # flip to "true" in staging
 
     depends_on:
       - mongo
+      - redis
+    restart: unless-stopped
+
+  redis-cleanup:
+    build:
+      context: ./api
+    container_name: maildrop-redis-cleanup
+    command: >
+      sh -c "
+        echo 'Redis cleanup worker started';
+        node src/redis-cleanup.js;
+      "
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      # How often to sweep — 6h default, first run nukes the backlog immediately
+      REDIS_CLEANUP_INTERVAL_MS: 21600000
+    depends_on:
       - redis
     restart: unless-stopped
 
