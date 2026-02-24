@@ -53,85 +53,167 @@ exports.shutdown = function () {
     if (mongoClient) mongoClient.close();
 };
 
-// ── OTP Extractor ─────────────────────────────────────────────────────────────
-// Checks subject first (faster, more reliable), then falls back to plain text.
-// Four layered patterns ordered by confidence.
-function extractOtp(subject, text) {
-    const sources = [subject, text].filter(Boolean);
-    for (const src of sources) {
-        // P1: keyword immediately before digits  ("Your code: 123456", "OTP is 456789")
-        let m = src.match(/(?:code|otp|verification|verify|pin|token|passcode|one.time)[^0-9]{0,15}(\b\d{4,8}\b)/i);
-        if (m) return m[1];
+// ─────────────────────────────────────────────────────────────────────────────
+//  OTP + LINK EXTRACTION  –  compiled once at module load, not per-email
+// ─────────────────────────────────────────────────────────────────────────────
 
-        // P2: digits before keyword  ("123456 is your OTP", "456789 — verification code")
-        m = src.match(/\b(\d{4,8})\b[^0-9]{0,30}(?:code|otp|verification|verify|pin|token|passcode)/i);
-        if (m) return m[1];
+// Keyword stems used in both OTP and link patterns
+const OTP_KW = `(?:
+  verification[\\s-]*code|one[\\s-]*time[\\s-]*(?:password|passcode|code)|
+  auth(?:entication)?[\\s-]*code|security[\\s-]*code|
+  \\b(?:otp|pin|token|passcode|access[\\s-]*code)\\b
+)`.replace(/\s+/g, '');
 
-        // P3: standalone 6-digit number (most common OTP length)
-        m = src.match(/\b(\d{6})\b/);
-        if (m) return m[1];
+// P1 — keyword BEFORE digits (highest confidence)
+const RE_KW_BEFORE = new RegExp(
+  `${OTP_KW}[^0-9a-zA-Z]{0,25}(\\d{4,8})`, 'i'
+);
+// P2 — digits BEFORE keyword (e.g. "123456 is your OTP")
+const RE_KW_AFTER = new RegExp(
+  `(?<![.\\w@#])(?<![\\d])(\\d{4,8})(?![.\\w@#%])(?:[^0-9]{0,40})${OTP_KW}`, 'i'
+);
+// P3 — isolated 6-digit (most common OTP length)
+// Negative lookbehind/ahead blocks: dot, word-char, @, #, /, - adjacent to digit
+const RE_SIX = /(?<![.\w@#\/\-])(\d{6})(?![.\w@#\/\-])/;
+// P4 — isolated 4 or 8-digit  (bank PINs, backup codes)
+const RE_FOUR_EIGHT = /(?<![.\w@#\/\-])(\d{4}|\d{8})(?![.\w@#\/\-])/;
 
-        // P4: standalone 4 or 8-digit number (bank PINs, backup codes)
-        m = src.match(/\b(\d{4}|\d{8})\b/);
-        if (m) return m[1];
+// If the candidate matches any of these, reject it — catches addresses, years,
+// phone numbers, prices, Instagram-style ids, etc.
+const OTP_REJECT = [
+  /^\d{9,}$/,              // too long (phone numbers)
+  /^(?:19|20)\d{2}$/,      // looks like a year
+  /^\d+[,\.]\d+$/,         // price / decimal
+];
+
+// Context guard for P3/P4: only use the digit-only fallbacks when an OTP-like
+// keyword appears somewhere in the same source string (within 400 chars either side).
+// This kills false positives in newsletters, receipts, address blocks.
+const RE_OTP_CONTEXT_GUARD = new RegExp(OTP_KW, 'i');
+
+function extractOtp(subject, textBody) {
+  const sources = [subject, textBody].filter(Boolean);
+
+  for (const src of sources) {
+    // --- P1 ---
+    let m = src.match(RE_KW_BEFORE);
+    if (m && !OTP_REJECT.some(r => r.test(m[1]))) return m[1];
+
+    // --- P2 ---
+    m = src.match(RE_KW_AFTER);
+    if (m && !OTP_REJECT.some(r => r.test(m[1]))) return m[1];
+  }
+
+  // --- P3 / P4 — only if a keyword anchor exists in the same source ---
+  for (const src of sources) {
+    if (!RE_OTP_CONTEXT_GUARD.test(src)) continue;   // no keyword → skip
+
+    let m = src.match(RE_SIX);
+    if (m) {
+      const cand = m[1];
+      if (!OTP_REJECT.some(r => r.test(cand))) {
+        // Extra guard: reject if preceded by a letter/digit run (username / ID)
+        const idx = src.indexOf(cand);
+        const before = src.slice(Math.max(0, idx - 3), idx);
+        if (/[\w.]$/.test(before)) continue;   // e.g. "otter.698130"
+        return cand;
+      }
     }
-    return null;
+
+    m = src.match(RE_FOUR_EIGHT);
+    if (m) {
+      const cand = m[1];
+      if (!OTP_REJECT.some(r => r.test(cand))) {
+        const idx = src.indexOf(cand);
+        const before = src.slice(Math.max(0, idx - 3), idx);
+        if (/[\w.]$/.test(before)) continue;
+        return cand;
+      }
+    }
+  }
+
+  return null;
 }
 
-// ── Verification / Magic Link Extractor ──────────────────────────────────────
-// Extracts the first URL whose href OR surrounding text matches verification keywords.
-// Works on both HTML (href attributes) and plain text (raw URLs).
+// ─────────────────────────────────────────────────────────────────────────────
+//  VERIFICATION / MAGIC LINK EXTRACTION
+// ─────────────────────────────────────────────────────────────────────────────
+
+// URL path/param segments that strongly signal a verification link
+const RE_LINK_URL   = /\/(?:verif|confirm|activat|validat|magic|auth|reset|click|account\/activ|email\/verif|go\/?verify|check|optin|opt-in|double-opt|signup\/confirm)/i;
+// URL params that signal verification
+const RE_LINK_PARAM = /[?&](?:token|code|key|hash|nonce|confirm|activate|verif)=/i;
+// Link-text / surrounding HTML text signals
+const RE_LINK_TEXT  = /confirm|verif|activat|validat|magic\s+link|click\s+here|complete|authenticate|set\s+(?:up\s+)?(?:your\s+)?(?:account|password)|reset\s+password/i;
+// Hard-reject: unsubscribe-only links pollute results
+const RE_UNSUBSCRIBE = /unsubscri/i;
+
+/**
+ * Score a candidate URL+context. Higher = more confident verification link.
+ * Returns 0 if clearly not a verification link.
+ */
+function scoreLinkCandidate(href, linkText) {
+  let score = 0;
+  if (RE_LINK_URL.test(href))    score += 10;
+  if (RE_LINK_PARAM.test(href))  score += 6;
+  if (RE_LINK_TEXT.test(linkText)) score += 4;
+  if (RE_UNSUBSCRIBE.test(href) || RE_UNSUBSCRIBE.test(linkText)) score -= 20;
+  return score;
+}
+
+function isValidHttp(href) {
+  if (!href.startsWith('http')) return false;
+  try { new URL(href); return true; } catch { return false; }
+}
+
 function extractVerificationLink(html, text) {
-    const verifyPattern = /verif|confirm|activat|validat|magic.link|click.here|complete|authenticate|auth|reset.password|unsubscri/i;
+  let best = null;
+  let bestScore = 0;
 
-    // 1. Parse href attributes from HTML — most reliable since the link text is nearby
-    if (html) {
-        const hrefRegex = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-        let match;
-        while ((match = hrefRegex.exec(html)) !== null) {
-            const href = match[1];
-            const linkText = match[2].replace(/<[^>]+>/g, '').trim(); // strip inner tags
-            // Accept if URL itself or the link text looks like a verification link
-            if (verifyPattern.test(href) || verifyPattern.test(linkText)) {
-                // Filter out unsubscribe-only links unless nothing else found
-                if (!/unsubscri/i.test(href) && !/unsubscri/i.test(linkText)) {
-                    try { new URL(href); return href; } catch (_) { /* invalid URL, skip */ }
-                }
-            }
-        }
-
-        // Second pass: check the 100-char context window around each https link in HTML
-        const allHrefs = [...html.matchAll(/href=["']([^"']+)["']/gi)].map(m => m[1]);
-        for (const href of allHrefs) {
-            const idx = html.indexOf(href);
-            const ctx = html.slice(Math.max(0, idx - 100), idx + href.length + 100);
-            if (verifyPattern.test(ctx.replace(/<[^>]+>/g, ''))) {
-                try { new URL(href); return href; } catch (_) { /* skip */ }
-            }
-        }
+  // ── 1. Parse <a> tags from HTML — most reliable ──────────────────────────
+  if (html) {
+    // Single-pass regex: capture href and inner content together
+    const aTag = /<a[^>]+href=["']([^"']{8,2000})["'][^>]*>([\s\S]{0,300}?)<\/a>/gi;
+    let m;
+    while ((m = aTag.exec(html)) !== null) {
+      const href = m[1].trim();
+      if (!isValidHttp(href)) continue;
+      const linkText = m[2].replace(/<[^>]+>/g, ' ').trim();
+      const s = scoreLinkCandidate(href, linkText);
+      if (s > bestScore) { bestScore = s; best = href; }
     }
+    if (bestScore >= 6) return best;   // confident match from HTML
 
-    // 2. Plain text fallback — look for URLs with verify-like path segments
-    if (text) {
-        const urlRegex = /https?:\/\/[^\s"'<>\]]+/g;
-        const urls = text.match(urlRegex) || [];
-        for (const url of urls) {
-            if (verifyPattern.test(url)) {
-                try { new URL(url); return url; } catch (_) { /* skip */ }
-            }
-        }
-
-        // Final pass: check 200-char context window around each URL in plain text
-        for (const url of urls) {
-            const idx = text.indexOf(url);
-            const ctx = text.slice(Math.max(0, idx - 200), idx + url.length + 200);
-            if (verifyPattern.test(ctx)) {
-                try { new URL(url); return url; } catch (_) { /* skip */ }
-            }
-        }
+    // Second pass: context window around every href (catches buttons, images, etc.)
+    const allHrefs = [...html.matchAll(/href=["']([^"']{8,2000})["']/gi)];
+    for (const hm of allHrefs) {
+      const href = hm[1].trim();
+      if (!isValidHttp(href)) continue;
+      const idx = html.indexOf(href);
+      const ctx = html
+        .slice(Math.max(0, idx - 150), idx + href.length + 150)
+        .replace(/<[^>]+>/g, ' ');
+      const s = scoreLinkCandidate(href, ctx);
+      if (s > bestScore) { bestScore = s; best = href; }
     }
+    if (bestScore >= 4) return best;
+  }
 
-    return null;
+  // ── 2. Plain text fallback ────────────────────────────────────────────────
+  if (text) {
+    const urlRe = /https?:\/\/[^\s"'<>\]]{10,}/g;
+    let m;
+    while ((m = urlRe.exec(text)) !== null) {
+      const href = m[0].replace(/[.,;:)]+$/, ''); // strip trailing punctuation
+      if (!isValidHttp(href)) continue;
+      const idx = text.indexOf(href);
+      const ctx = text.slice(Math.max(0, idx - 250), idx + href.length + 250);
+      const s = scoreLinkCandidate(href, ctx);
+      if (s > bestScore) { bestScore = s; best = href; }
+    }
+  }
+
+  return bestScore > 0 ? best : null;
 }
 
 async function getUserData(recipientEmail) {

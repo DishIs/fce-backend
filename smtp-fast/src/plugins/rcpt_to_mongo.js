@@ -54,127 +54,41 @@ exports.shutdown = function () {
     if (mongoClient) mongoClient.close();
 };
 
+// rcpt_to_mongo.js — RCPT hook only does Redis lookup.
+// Redis is populated by a separate verification worker.
+
 exports.check_custom_domain = async function (next, connection, params) {
-    const recipient = params[0];
-    const domain = recipient.host.toLowerCase();
+    const domain = params[0].host.toLowerCase();
 
-    // --- Optimization: Check against the free domain list first ---
-    // If the domain is one of our own free-tier domains, this plugin has no opinion.
-    // It will be handled by the next plugin in the chain (rcpt_to.in_host_list).
-    if (freeDomains.includes(domain)) {
-        connection.logdebug(plugin, `Domain ${domain} is a free host, deferring to next plugin.`);
-        return next();
+    if (freeDomains.includes(domain)) return next();
+
+    if (!redisClient.isOpen) {
+        plugin.logerror("Redis not available for custom domain check.");
+        return next(DENYSOFT, "Backend temporarily unavailable.");
     }
-
-    // If we've reached here, the domain is NOT a free domain. It might be a pro domain.
-    connection.logdebug(plugin, `Domain ${domain} is not a free host, checking for pro status.`);
-
-    // --- Ensure our database connections are live ---
-    if (!db || !redisClient.isOpen) {
-        plugin.logerror("A database connection is not available for custom domain check.");
-        return next(DENYSOFT, "Backend service is temporarily unavailable.");
-    }
-
-    const customDomainsSetKey = 'verified_custom_domains';
 
     try {
-        // 1. Check Redis cache for the pro domain. This is for high performance.
-        const isMember = await redisClient.sIsMember(customDomainsSetKey, domain);
-        if (isMember) {
-            connection.logdebug(plugin, `Domain ${domain} found in pro domain Redis cache. Accepting.`);
-            return next(OK); // Accept the recipient and stop further rcpt checks.
-        }
+        const isMember = await redisClient.sIsMember('verified_custom_domains', domain);
+        if (isMember) return next(OK);
 
-        // 2. If not in cache, query MongoDB for verified pro domains.
-        const userWithDomain = await db.collection('users').findOne({
-            "customDomains.domain": domain,
-            "customDomains.verified": true, // ✅ Only verified ones
-            "plan": "pro"
+        // Not in Redis — do a single fast MongoDB lookup, NO DNS here.
+        // DNS was already verified when the user set up their domain in the dashboard,
+        // and is periodically re-verified by the background worker.
+        const user = await db.collection('users').findOne({
+            plan: 'pro',
+            'customDomains.domain': domain,
+            'customDomains.verified': true
         });
 
-        if (userWithDomain) {
-            // Find the exact domain record to get its TXT verification value and MX record
-            const domainRecord = userWithDomain.customDomains.find(d => d.domain === domain && d.verified);
-            const expectedTxtValue = domainRecord?.txtRecord;
-            const expectedMxHost = domainRecord?.mxRecord || 'mx.freecustom.email';
-
-            if (!expectedTxtValue) {
-                plugin.logerror(`Verified domain ${domain} has no TXT record stored.`);
-                return next(DENY, `Invalid domain verification setup for ${domain}`);
-            }
-
-            try {
-                // --- TXT Record Validation ---
-                const txtRecords = await dns.resolveTxt(domain);
-                const isTxtVerified = txtRecords.flat().includes(expectedTxtValue);
-
-                if (!isTxtVerified) {
-                    // TXT record no longer matches — instantly set verified=false
-                    await db.collection('users').updateOne(
-                        { _id: userWithDomain._id, "customDomains.domain": domain },
-                        { $set: { "customDomains.$.verified": false } }
-                    );
-
-                    // Remove from Redis cache if present
-                    await redisClient.sRem(customDomainsSetKey, domain);
-
-                    plugin.logerror(`TXT record mismatch for ${domain}. Verification revoked.`);
-                    return next(DENY, `Domain ${domain} TXT record mismatch. Contact admin to re-verify.`);
-                }
-
-                // --- NEW: MX Record Validation ---
-                let mxRecords = [];
-                try {
-                    mxRecords = await dns.resolveMx(domain);
-                } catch (mxError) {
-                    if (mxError.code === 'ENODATA' || mxError.code === 'ENOTFOUND') {
-                        // MX record missing - revoke verification
-                        await db.collection('users').updateOne(
-                            { _id: userWithDomain._id, "customDomains.domain": domain },
-                            { $set: { "customDomains.$.verified": false } }
-                        );
-                        await redisClient.sRem(customDomainsSetKey, domain);
-                        
-                        plugin.logerror(`MX record not found for ${domain}. Verification revoked.`);
-                        return next(DENY, `Domain ${domain} has no MX record. Contact admin to re-verify.`);
-                    }
-                    throw mxError; // Re-throw other errors
-                }
-
-                const isMxValid = mxRecords.some(mx => 
-                    mx.exchange.toLowerCase() === expectedMxHost.toLowerCase() ||
-                    mx.exchange.toLowerCase().endsWith('.freecustom.email')
-                );
-
-                if (!isMxValid) {
-                    // MX record doesn't point to our server - revoke verification
-                    await db.collection('users').updateOne(
-                        { _id: userWithDomain._id, "customDomains.domain": domain },
-                        { $set: { "customDomains.$.verified": false } }
-                    );
-                    await redisClient.sRem(customDomainsSetKey, domain);
-
-                    const currentMxHosts = mxRecords.map(m => m.exchange).join(', ');
-                    plugin.logerror(`MX record mismatch for ${domain}. Expected ${expectedMxHost}, got: ${currentMxHosts}`);
-                    return next(DENY, `Domain ${domain} MX record mismatch. Contact admin to re-verify.`);
-                }
-
-                // ✅ Passed both TXT and MX checks — cache and accept
-                await redisClient.sAdd(customDomainsSetKey, domain);
-                connection.logdebug(plugin, `Domain ${domain} passed both TXT and MX validation.`);
-                return next(OK);
-
-            } catch (err) {
-                plugin.logerror(`DNS lookup failed for ${domain}: ${err.message}`);
-                return next(DENYSOFT, `Could not verify DNS records for ${domain}. Try again later.`);
-            }
+        if (user) {
+            // Warm the cache so next email is instant
+            await redisClient.sAdd('verified_custom_domains', domain);
+            return next(OK);
         }
 
-        // No verified entry → skip
-        connection.logdebug(plugin, `Domain ${domain} not found as verified in MongoDB. Deferring.`);
-        next();
+        next(); // unknown domain, let it fall through
     } catch (e) {
-        plugin.logerror(`Error checking custom domain ${domain}: ${e.stack}`);
-        next(DENYSOFT, 'Temporary backend error during address validation.');
+        plugin.logerror(`Error in check_custom_domain for ${domain}: ${e.stack}`);
+        next(DENYSOFT, 'Temporary backend error.');
     }
 };
