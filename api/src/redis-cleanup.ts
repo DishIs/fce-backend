@@ -1,38 +1,46 @@
-// api/src/redis-cleanup.js
+// api/src/redis-cleanup.ts
 //
 // Runs as a standalone Docker worker.
 // Periodically scans for stale / orphaned maildrop:* Redis keys and
 // deletes or fixes them. Safe to run continuously alongside production.
 //
-// Run manually:  node src/redis-cleanup.js [--once] [--dry-run]
+// Run manually:  npx ts-node src/redis-cleanup.ts [--once] [--dry-run]
 //   --once       Single pass then exit
 //   --dry-run    Report only, no deletes
 
-'use strict';
+import { createClient } from 'redis';
+import dotenv from 'dotenv';
+dotenv.config();
 
-const { createClient } = require('redis');
-require('dotenv').config();
-
-const REDIS_URL   = process.env.REDIS_URL   || 'redis://localhost:6379';
+const REDIS_URL   = process.env.REDIS_URL || 'redis://localhost:6379';
 const INTERVAL_MS = parseInt(process.env.REDIS_CLEANUP_INTERVAL_MS || '', 10)
                     || 6 * 60 * 60 * 1000; // default 6h
 
-const MAX_TTL = {
-    anon: 10 * 60 * 60,  // 10h
-    free: 24 * 60 * 60,  // 24h
+const MAX_TTL: Record<string, number> = {
+    anon: 10 * 60 * 60, // 10h
+    free: 24 * 60 * 60, // 24h
 };
+
+interface SweepCounts {
+    deleted: number;
+    orphan:  number;
+    skipped: number;
+    error:   number;
+}
 
 // ── Core sweep ───────────────────────────────────────────────────────────────
 
-async function runSweep(redis, dryRun) {
-    const now = new Date().toISOString();
+async function runSweep(
+    redis:  ReturnType<typeof createClient>,
+    dryRun: boolean,
+): Promise<void> {
     console.log('\n' + '='.repeat(60));
-    console.log(`Redis Key Cleanup — ${now}`);
+    console.log(`Redis Key Cleanup — ${new Date().toISOString()}`);
     console.log(`Mode: ${dryRun ? 'DRY RUN (no deletes)' : 'LIVE'}`);
     console.log('='.repeat(60));
 
-    const seen   = new Set();
-    const counts = { deleted: 0, orphan: 0, skipped: 0, error: 0 };
+    const seen: Set<string>  = new Set();
+    const counts: SweepCounts = { deleted: 0, orphan: 0, skipped: 0, error: 0 };
 
     for await (const key of redis.scanIterator({ MATCH: 'maildrop:*', COUNT: 500 })) {
         if (seen.has(key)) continue;
@@ -82,10 +90,10 @@ async function runSweep(redis, dryRun) {
                 if (!dryRun) await redis.del(key);
                 counts.deleted++;
             } else {
-                counts.skipped++; // healthy key
+                counts.skipped++;
             }
 
-        } catch (err) {
+        } catch (err: any) {
             console.error(`Error processing key "${key}": ${err.message}`);
             counts.error++;
         }
@@ -103,13 +111,13 @@ async function runSweep(redis, dryRun) {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-async function main() {
+async function main(): Promise<void> {
     const args   = process.argv.slice(2);
     const once   = args.includes('--once');
     const dryRun = args.includes('--dry-run');
 
     const redis = createClient({ url: REDIS_URL });
-    redis.on('error', err => console.error('Redis error:', err));
+    redis.on('error', (err: Error) => console.error('Redis error:', err));
     await redis.connect();
 
     console.log('Redis cleanup worker connected.');

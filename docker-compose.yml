@@ -124,7 +124,7 @@ services:
     command: >
       sh -c "
         echo 'Redis cleanup worker started';
-        node src/redis-cleanup.js;
+        node dist/redis-cleanup.js;
       "
     environment:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
