@@ -64,58 +64,59 @@ const OTP_KW = `(?:
   \\b(?:otp|pin|token|passcode|access[\\s-]*code)\\b
 )`.replace(/\s+/g, '');
 
-// P1 — keyword BEFORE digits (highest confidence)
 const RE_KW_BEFORE = new RegExp(
   `${OTP_KW}[^0-9a-zA-Z]{0,25}(\\d{4,8})`, 'i'
 );
-// P2 — digits BEFORE keyword (e.g. "123456 is your OTP")
 const RE_KW_AFTER = new RegExp(
   `(?<![.\\w@#])(?<![\\d])(\\d{4,8})(?![.\\w@#%])(?:[^0-9]{0,40})${OTP_KW}`, 'i'
 );
-// P3 — isolated 6-digit (most common OTP length)
-// Negative lookbehind/ahead blocks: dot, word-char, @, #, /, - adjacent to digit
-const RE_SIX = /(?<![.\w@#\/\-])(\d{6})(?![.\w@#\/\-])/;
-// P4 — isolated 4 or 8-digit  (bank PINs, backup codes)
-const RE_FOUR_EIGHT = /(?<![.\w@#\/\-])(\d{4}|\d{8})(?![.\w@#\/\-])/;
 
-// If the candidate matches any of these, reject it — catches addresses, years,
-// phone numbers, prices, Instagram-style ids, etc.
+// ✅ NEW — catches "569830 is your Instagram code", "123456 is your code"
+// "X is your [optional-brand] code" — very specific structure, near-zero false positives
+const RE_IS_YOUR_CODE = /(?<![.\w@#\/\-])(\d{4,8})(?![.\w@#\/\-])\s+is\s+your\s+(?:\w+\s+)?code\b/i;
+
+const RE_SIX          = /(?<![.\w@#\/\-])(\d{6})(?![.\w@#\/\-])/;
+const RE_FOUR_EIGHT   = /(?<![.\w@#\/\-])(\d{4}|\d{8})(?![.\w@#\/\-])/;
+
 const OTP_REJECT = [
-  /^\d{9,}$/,              // too long (phone numbers)
-  /^(?:19|20)\d{2}$/,      // looks like a year
-  /^\d+[,\.]\d+$/,         // price / decimal
+  /^\d{9,}$/,
+  /^(?:19|20)\d{2}$/,
+  /^\d+[,\.]\d+$/,
 ];
 
+const RE_OTP_CONTEXT_GUARD = new RegExp(OTP_KW, 'i');
 // Context guard for P3/P4: only use the digit-only fallbacks when an OTP-like
 // keyword appears somewhere in the same source string (within 400 chars either side).
 // This kills false positives in newsletters, receipts, address blocks.
-const RE_OTP_CONTEXT_GUARD = new RegExp(OTP_KW, 'i');
 
 function extractOtp(subject, textBody) {
   const sources = [subject, textBody].filter(Boolean);
 
   for (const src of sources) {
-    // --- P1 ---
+    // P1 — keyword before digits
     let m = src.match(RE_KW_BEFORE);
     if (m && !OTP_REJECT.some(r => r.test(m[1]))) return m[1];
 
-    // --- P2 ---
+    // P1.5 — "X is your [brand] code"  ← NEW
+    m = src.match(RE_IS_YOUR_CODE);
+    if (m && !OTP_REJECT.some(r => r.test(m[1]))) return m[1];
+
+    // P2 — digits before keyword
     m = src.match(RE_KW_AFTER);
     if (m && !OTP_REJECT.some(r => r.test(m[1]))) return m[1];
   }
 
-  // --- P3 / P4 — only if a keyword anchor exists in the same source ---
+  // P3 / P4 — digit-only fallbacks, only when OTP keyword exists in source
   for (const src of sources) {
-    if (!RE_OTP_CONTEXT_GUARD.test(src)) continue;   // no keyword → skip
+    if (!RE_OTP_CONTEXT_GUARD.test(src)) continue;
 
     let m = src.match(RE_SIX);
     if (m) {
       const cand = m[1];
       if (!OTP_REJECT.some(r => r.test(cand))) {
-        // Extra guard: reject if preceded by a letter/digit run (username / ID)
         const idx = src.indexOf(cand);
         const before = src.slice(Math.max(0, idx - 3), idx);
-        if (/[\w.]$/.test(before)) continue;   // e.g. "otter.698130"
+        if (/[\w.]$/.test(before)) continue;
         return cand;
       }
     }
