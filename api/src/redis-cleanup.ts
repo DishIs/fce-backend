@@ -110,6 +110,35 @@ async function runSweep(
     console.log('='.repeat(60) + '\n');
 }
 
+// ── Startup helper ────────────────────────────────────────────────────────────
+// Redis replays its AOF/RDB on startup which can take minutes for large datasets.
+// Any command during that window throws LOADING. Poll until it's actually ready.
+
+async function waitForRedis(redis: ReturnType<typeof createClient>): Promise<void> {
+    const MAX_WAIT_MS   = 5 * 60 * 1000; // give up after 5 min
+    const POLL_INTERVAL = 3_000;
+    const deadline      = Date.now() + MAX_WAIT_MS;
+
+    process.stdout.write('Waiting for Redis to finish loading');
+
+    while (Date.now() < deadline) {
+        try {
+            await redis.ping();
+            console.log(' ready.');
+            return;
+        } catch (err: any) {
+            if (err?.message?.includes('LOADING')) {
+                process.stdout.write('.');
+                await new Promise(r => setTimeout(r, POLL_INTERVAL));
+            } else {
+                throw err;
+            }
+        }
+    }
+
+    throw new Error('Redis did not finish loading within 5 minutes.');
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -120,6 +149,8 @@ async function main(): Promise<void> {
     const redis = createClient({ url: REDIS_URL });
     redis.on('error', (err: Error) => console.error('Redis error:', err));
     await redis.connect();
+
+    await waitForRedis(redis);
 
     console.log('Redis cleanup worker connected.');
 
