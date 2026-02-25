@@ -418,3 +418,38 @@ export async function getUserStorageHandler(req: Request, res: Response) {
         return res.status(500).json({ success: false, message: 'Internal Server Error' });
     }
 }
+
+export async function saveFcmTokenHandler(req: Request, res: Response) {
+    const { wyiUserId, token } = req.body;
+
+    if (!wyiUserId || !token) {
+        return res.status(400).json({ success: false, message: 'User ID and Token are required.' });
+    }
+
+    try {
+        // Find the user by wyiUserId or linked provider
+        // We update the fcmToken field. 
+        // Note: For production with multiple devices, you might want to use $addToSet with an array.
+        // Here we assume one active device per user for simplicity.
+        const result = await db.collection('users').updateOne(
+            {
+                $or: [
+                    { wyiUserId: wyiUserId },
+                    { linkedProviderIds: wyiUserId }
+                ]
+            },
+            {
+                $set: { fcmToken: token, lastSeenAt: new Date() }
+            }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ success: false, message: 'User not found.' });
+        }
+
+        return res.status(200).json({ success: true, message: 'Token saved successfully.' });
+    } catch (error) {
+        console.error("Error saving FCM token:", error);
+        return res.status(500).json({ success: false, message: 'Server error' });
+    }
+}

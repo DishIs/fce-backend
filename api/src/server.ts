@@ -17,7 +17,8 @@ import {
   getUserStatusHandler,
   updateSettingsHandler,
   getSettingsHandler,
-  upgradeUserSubscriptionHandler
+  upgradeUserSubscriptionHandler,
+  saveFcmTokenHandler
 } from './user';
 import { deleteDomainHandler, getDashboardDataHandler, verifyDomainHandler } from './domain-handler';
 import { addInboxHandler } from './inbox-handler';
@@ -86,6 +87,10 @@ connectToMongo().then(() => {
   app.post('/user/mute', muteSenderHandler);
   app.delete('/user/mute', unmuteSenderHandler);
   app.post('/user/inboxes', addInboxHandler);
+
+  // FCM / Notifications
+  app.post('/user/fcm-token', saveFcmTokenHandler); // <--- ADD THIS LINE
+
 
   // Billing (Internal/NextJS callback)
   app.post('/user/upgrade', upgradeUserSubscriptionHandler); // NEW: Upgrade to Pro

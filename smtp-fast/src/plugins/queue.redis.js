@@ -6,6 +6,8 @@ const { simpleParser } = require('mailparser');
 const { createClient } = require('redis');
 const { MongoClient, GridFSBucket, ObjectId } = require('mongodb');
 const { Readable } = require('stream');
+const admin = require('firebase-admin'); // <--- 1. REQUIRE FIREBASE
+
 
 let redisClient;
 let mongoClient;
@@ -27,6 +29,20 @@ exports.load_ini = function () {
     const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
     const mongoUrl = process.env.MONGO_URI || 'mongodb://localhost:27017';
     const dbName = 'freecustomemail';
+
+    if (admin.apps.length === 0) {
+        try {
+            // Ensure serviceAccountKey.json is in the same folder or provide full path
+            const serviceAccount = require('./serviceAccountKey.json');
+            admin.initializeApp({
+                credential: admin.credential.cert(serviceAccount)
+            });
+            plugin.loginfo('Firebase Admin initialized successfully.');
+        } catch (err) {
+            plugin.logerror(`Failed to initialize Firebase: ${err.message}`);
+        }
+    }
+
 
     if (!redisClient) {
         redisClient = createClient({ url: redisUrl });
@@ -65,23 +81,23 @@ const OTP_KW = `(?:
 )`.replace(/\s+/g, '');
 
 const RE_KW_BEFORE = new RegExp(
-  `${OTP_KW}[^0-9a-zA-Z]{0,25}(\\d{4,8})`, 'i'
+    `${OTP_KW}[^0-9a-zA-Z]{0,25}(\\d{4,8})`, 'i'
 );
 const RE_KW_AFTER = new RegExp(
-  `(?<![.\\w@#])(?<![\\d])(\\d{4,8})(?![.\\w@#%])(?:[^0-9]{0,40})${OTP_KW}`, 'i'
+    `(?<![.\\w@#])(?<![\\d])(\\d{4,8})(?![.\\w@#%])(?:[^0-9]{0,40})${OTP_KW}`, 'i'
 );
 
 // ✅ NEW — catches "569830 is your Instagram code", "123456 is your code"
 // "X is your [optional-brand] code" — very specific structure, near-zero false positives
 const RE_IS_YOUR_CODE = /(?<![.\w@#\/\-])(\d{4,8})(?![.\w@#\/\-])\s+is\s+your\s+(?:\w+\s+)?code\b/i;
 
-const RE_SIX          = /(?<![.\w@#\/\-])(\d{6})(?![.\w@#\/\-])/;
-const RE_FOUR_EIGHT   = /(?<![.\w@#\/\-])(\d{4}|\d{8})(?![.\w@#\/\-])/;
+const RE_SIX = /(?<![.\w@#\/\-])(\d{6})(?![.\w@#\/\-])/;
+const RE_FOUR_EIGHT = /(?<![.\w@#\/\-])(\d{4}|\d{8})(?![.\w@#\/\-])/;
 
 const OTP_REJECT = [
-  /^\d{9,}$/,
-  /^(?:19|20)\d{2}$/,
-  /^\d+[,\.]\d+$/,
+    /^\d{9,}$/,
+    /^(?:19|20)\d{2}$/,
+    /^\d+[,\.]\d+$/,
 ];
 
 const RE_OTP_CONTEXT_GUARD = new RegExp(OTP_KW, 'i');
@@ -90,50 +106,50 @@ const RE_OTP_CONTEXT_GUARD = new RegExp(OTP_KW, 'i');
 // This kills false positives in newsletters, receipts, address blocks.
 
 function extractOtp(subject, textBody) {
-  const sources = [subject, textBody].filter(Boolean);
+    const sources = [subject, textBody].filter(Boolean);
 
-  for (const src of sources) {
-    // P1 — keyword before digits
-    let m = src.match(RE_KW_BEFORE);
-    if (m && !OTP_REJECT.some(r => r.test(m[1]))) return m[1];
+    for (const src of sources) {
+        // P1 — keyword before digits
+        let m = src.match(RE_KW_BEFORE);
+        if (m && !OTP_REJECT.some(r => r.test(m[1]))) return m[1];
 
-    // P1.5 — "X is your [brand] code"  ← NEW
-    m = src.match(RE_IS_YOUR_CODE);
-    if (m && !OTP_REJECT.some(r => r.test(m[1]))) return m[1];
+        // P1.5 — "X is your [brand] code"  ← NEW
+        m = src.match(RE_IS_YOUR_CODE);
+        if (m && !OTP_REJECT.some(r => r.test(m[1]))) return m[1];
 
-    // P2 — digits before keyword
-    m = src.match(RE_KW_AFTER);
-    if (m && !OTP_REJECT.some(r => r.test(m[1]))) return m[1];
-  }
-
-  // P3 / P4 — digit-only fallbacks, only when OTP keyword exists in source
-  for (const src of sources) {
-    if (!RE_OTP_CONTEXT_GUARD.test(src)) continue;
-
-    let m = src.match(RE_SIX);
-    if (m) {
-      const cand = m[1];
-      if (!OTP_REJECT.some(r => r.test(cand))) {
-        const idx = src.indexOf(cand);
-        const before = src.slice(Math.max(0, idx - 3), idx);
-        if (/[\w.]$/.test(before)) continue;
-        return cand;
-      }
+        // P2 — digits before keyword
+        m = src.match(RE_KW_AFTER);
+        if (m && !OTP_REJECT.some(r => r.test(m[1]))) return m[1];
     }
 
-    m = src.match(RE_FOUR_EIGHT);
-    if (m) {
-      const cand = m[1];
-      if (!OTP_REJECT.some(r => r.test(cand))) {
-        const idx = src.indexOf(cand);
-        const before = src.slice(Math.max(0, idx - 3), idx);
-        if (/[\w.]$/.test(before)) continue;
-        return cand;
-      }
-    }
-  }
+    // P3 / P4 — digit-only fallbacks, only when OTP keyword exists in source
+    for (const src of sources) {
+        if (!RE_OTP_CONTEXT_GUARD.test(src)) continue;
 
-  return null;
+        let m = src.match(RE_SIX);
+        if (m) {
+            const cand = m[1];
+            if (!OTP_REJECT.some(r => r.test(cand))) {
+                const idx = src.indexOf(cand);
+                const before = src.slice(Math.max(0, idx - 3), idx);
+                if (/[\w.]$/.test(before)) continue;
+                return cand;
+            }
+        }
+
+        m = src.match(RE_FOUR_EIGHT);
+        if (m) {
+            const cand = m[1];
+            if (!OTP_REJECT.some(r => r.test(cand))) {
+                const idx = src.indexOf(cand);
+                const before = src.slice(Math.max(0, idx - 3), idx);
+                if (/[\w.]$/.test(before)) continue;
+                return cand;
+            }
+        }
+    }
+
+    return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -141,11 +157,11 @@ function extractOtp(subject, textBody) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // URL path/param segments that strongly signal a verification link
-const RE_LINK_URL   = /\/(?:verif|confirm|activat|validat|magic|auth|reset|click|account\/activ|email\/verif|go\/?verify|check|optin|opt-in|double-opt|signup\/confirm)/i;
+const RE_LINK_URL = /\/(?:verif|confirm|activat|validat|magic|auth|reset|click|account\/activ|email\/verif|go\/?verify|check|optin|opt-in|double-opt|signup\/confirm)/i;
 // URL params that signal verification
 const RE_LINK_PARAM = /[?&](?:token|code|key|hash|nonce|confirm|activate|verif)=/i;
 // Link-text / surrounding HTML text signals
-const RE_LINK_TEXT  = /confirm|verif|activat|validat|magic\s+link|click\s+here|complete|authenticate|set\s+(?:up\s+)?(?:your\s+)?(?:account|password)|reset\s+password/i;
+const RE_LINK_TEXT = /confirm|verif|activat|validat|magic\s+link|click\s+here|complete|authenticate|set\s+(?:up\s+)?(?:your\s+)?(?:account|password)|reset\s+password/i;
 // Hard-reject: unsubscribe-only links pollute results
 const RE_UNSUBSCRIBE = /unsubscri/i;
 
@@ -154,67 +170,67 @@ const RE_UNSUBSCRIBE = /unsubscri/i;
  * Returns 0 if clearly not a verification link.
  */
 function scoreLinkCandidate(href, linkText) {
-  let score = 0;
-  if (RE_LINK_URL.test(href))    score += 10;
-  if (RE_LINK_PARAM.test(href))  score += 6;
-  if (RE_LINK_TEXT.test(linkText)) score += 4;
-  if (RE_UNSUBSCRIBE.test(href) || RE_UNSUBSCRIBE.test(linkText)) score -= 20;
-  return score;
+    let score = 0;
+    if (RE_LINK_URL.test(href)) score += 10;
+    if (RE_LINK_PARAM.test(href)) score += 6;
+    if (RE_LINK_TEXT.test(linkText)) score += 4;
+    if (RE_UNSUBSCRIBE.test(href) || RE_UNSUBSCRIBE.test(linkText)) score -= 20;
+    return score;
 }
 
 function isValidHttp(href) {
-  if (!href.startsWith('http')) return false;
-  try { new URL(href); return true; } catch { return false; }
+    if (!href.startsWith('http')) return false;
+    try { new URL(href); return true; } catch { return false; }
 }
 
 function extractVerificationLink(html, text) {
-  let best = null;
-  let bestScore = 0;
+    let best = null;
+    let bestScore = 0;
 
-  // ── 1. Parse <a> tags from HTML — most reliable ──────────────────────────
-  if (html) {
-    // Single-pass regex: capture href and inner content together
-    const aTag = /<a[^>]+href=["']([^"']{8,2000})["'][^>]*>([\s\S]{0,300}?)<\/a>/gi;
-    let m;
-    while ((m = aTag.exec(html)) !== null) {
-      const href = m[1].trim();
-      if (!isValidHttp(href)) continue;
-      const linkText = m[2].replace(/<[^>]+>/g, ' ').trim();
-      const s = scoreLinkCandidate(href, linkText);
-      if (s > bestScore) { bestScore = s; best = href; }
+    // ── 1. Parse <a> tags from HTML — most reliable ──────────────────────────
+    if (html) {
+        // Single-pass regex: capture href and inner content together
+        const aTag = /<a[^>]+href=["']([^"']{8,2000})["'][^>]*>([\s\S]{0,300}?)<\/a>/gi;
+        let m;
+        while ((m = aTag.exec(html)) !== null) {
+            const href = m[1].trim();
+            if (!isValidHttp(href)) continue;
+            const linkText = m[2].replace(/<[^>]+>/g, ' ').trim();
+            const s = scoreLinkCandidate(href, linkText);
+            if (s > bestScore) { bestScore = s; best = href; }
+        }
+        if (bestScore >= 6) return best;   // confident match from HTML
+
+        // Second pass: context window around every href (catches buttons, images, etc.)
+        const allHrefs = [...html.matchAll(/href=["']([^"']{8,2000})["']/gi)];
+        for (const hm of allHrefs) {
+            const href = hm[1].trim();
+            if (!isValidHttp(href)) continue;
+            const idx = html.indexOf(href);
+            const ctx = html
+                .slice(Math.max(0, idx - 150), idx + href.length + 150)
+                .replace(/<[^>]+>/g, ' ');
+            const s = scoreLinkCandidate(href, ctx);
+            if (s > bestScore) { bestScore = s; best = href; }
+        }
+        if (bestScore >= 4) return best;
     }
-    if (bestScore >= 6) return best;   // confident match from HTML
 
-    // Second pass: context window around every href (catches buttons, images, etc.)
-    const allHrefs = [...html.matchAll(/href=["']([^"']{8,2000})["']/gi)];
-    for (const hm of allHrefs) {
-      const href = hm[1].trim();
-      if (!isValidHttp(href)) continue;
-      const idx = html.indexOf(href);
-      const ctx = html
-        .slice(Math.max(0, idx - 150), idx + href.length + 150)
-        .replace(/<[^>]+>/g, ' ');
-      const s = scoreLinkCandidate(href, ctx);
-      if (s > bestScore) { bestScore = s; best = href; }
+    // ── 2. Plain text fallback ────────────────────────────────────────────────
+    if (text) {
+        const urlRe = /https?:\/\/[^\s"'<>\]]{10,}/g;
+        let m;
+        while ((m = urlRe.exec(text)) !== null) {
+            const href = m[0].replace(/[.,;:)]+$/, ''); // strip trailing punctuation
+            if (!isValidHttp(href)) continue;
+            const idx = text.indexOf(href);
+            const ctx = text.slice(Math.max(0, idx - 250), idx + href.length + 250);
+            const s = scoreLinkCandidate(href, ctx);
+            if (s > bestScore) { bestScore = s; best = href; }
+        }
     }
-    if (bestScore >= 4) return best;
-  }
 
-  // ── 2. Plain text fallback ────────────────────────────────────────────────
-  if (text) {
-    const urlRe = /https?:\/\/[^\s"'<>\]]{10,}/g;
-    let m;
-    while ((m = urlRe.exec(text)) !== null) {
-      const href = m[0].replace(/[.,;:)]+$/, ''); // strip trailing punctuation
-      if (!isValidHttp(href)) continue;
-      const idx = text.indexOf(href);
-      const ctx = text.slice(Math.max(0, idx - 250), idx + href.length + 250);
-      const s = scoreLinkCandidate(href, ctx);
-      if (s > bestScore) { bestScore = s; best = href; }
-    }
-  }
-
-  return bestScore > 0 ? best : null;
+    return bestScore > 0 ? best : null;
 }
 
 async function getUserData(recipientEmail) {
@@ -534,6 +550,51 @@ exports.tiered_save = async function (next, connection) {
                 otp,
                 verificationLink,
             }));
+
+            if (userId) {
+                // Fetch the user fresh from DB to get the latest FCM token
+                // (getUserData might be cached in Redis without the token)
+                db.collection('users').findOne({ _id: userId }, { projection: { fcmToken: 1 } })
+                    .then(userRecord => {
+                        if (userRecord && userRecord.fcmToken) {
+
+                            // Construct Notification Body
+                            let bodyText = `New email from ${parsed.from?.text || 'Unknown'}`;
+                            if (otp && plan === 'pro') bodyText = `Code: ${otp}`;
+                            else if (otp) bodyText = `Verification code detected!`;
+
+                            const messagePayload = {
+                                token: userRecord.fcmToken,
+                                data: {
+                                    type: 'new_mail',
+                                    title: parsed.subject || 'New Message',
+                                    body: bodyText,
+                                    mailbox: destination,
+                                    messageId: fullMessage.id,
+                                    otp: otp || '',
+                                    verificationLink: verificationLink || ''
+                                },
+                                // Android specific settings for priority
+                                android: {
+                                    priority: 'high'
+                                }
+                            };
+
+                            admin.messaging().send(messagePayload)
+                                .then(response => {
+                                    plugin.logdebug(`FCM notification sent to ${destination}: ${response}`);
+                                })
+                                .catch(err => {
+                                    // If token is invalid (uninstalled), remove it to clean DB
+                                    if (err.code === 'messaging/registration-token-not-registered') {
+                                        db.collection('users').updateOne({ _id: userId }, { $unset: { fcmToken: "" } });
+                                    }
+                                    plugin.logerror(`FCM failed for ${destination}: ${err.message}`);
+                                });
+                        }
+                    })
+                    .catch(err => plugin.logerror(`Error fetching user for FCM: ${err}`));
+            }
 
             await multi.exec();
             plugin.loginfo(`Successfully queued message ${messageId} for ${destination} to plan '${plan}'`);
