@@ -23,6 +23,8 @@ import { deleteDomainHandler, getDashboardDataHandler, verifyDomainHandler } fro
 import { addInboxHandler } from './inbox-handler';
 import { domainsHandler } from './domains';
 import { handlePaddleSubscriptionEvent } from './paddle-handler';
+import jwt from 'jsonwebtoken';
+
 
 dotenv.config();
 
@@ -116,13 +118,26 @@ connectToMongo().then(() => {
   }
 
   wss.on('connection', (ws: WebSocket, req) => {
-    const url = req.url || '';
-    const mailbox = new URLSearchParams(url.split('?')[1]).get('mailbox');
+    const urlParams = new URLSearchParams(req.url?.split('?')[1] ?? '');
+    const mailbox = urlParams.get('mailbox');
+    const wsToken = urlParams.get('token');
 
-    if (!mailbox) {
-      ws.close();
+    if (!mailbox) { ws.close(1008, 'Missing mailbox'); return; }
+
+    // Verify the ticket
+    try {
+      const decoded = jwt.verify(wsToken ?? '', process.env.JWT_SECRET!) as jwt.JwtPayload;
+
+      // Ensure the token was issued for THIS mailbox — prevents token reuse
+      if (decoded.mailbox !== mailbox) {
+        ws.close(1008, 'Token mailbox mismatch');
+        return;
+      }
+    } catch (err) {
+      ws.close(1008, 'Unauthorized');
       return;
     }
+
 
     if (!mailboxClients[mailbox]) mailboxClients[mailbox] = new Set();
     mailboxClients[mailbox].add(ws);
