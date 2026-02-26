@@ -3,6 +3,9 @@ import { Request, Response } from 'express';
 import { db } from './mongo';
 import { ISubscription, IPaymentLog } from './mongo';
 import { migrateUserEmailsToPro } from './upgrade-migration';
+import { getCancellationEmailHtml } from './email/templates';
+import nodemailer from 'nodemailer';
+
 
 // ---------------------------------------------------------------
 // Paddle event types forwarded from Next.js webhook route
@@ -43,6 +46,37 @@ async function findUserBySubscriptionId(subscriptionId: string) {
     'subscription.subscriptionId': subscriptionId,
   });
 }
+
+// Helper (add once, near the top of the file):
+async function sendCancellationEmail(
+  toEmail: string,
+  data: {
+    periodEnd: string;
+    emailCount: number;
+    storageUsedMB: number;
+    inboxCount: number;
+  }
+) {
+  if (!process.env.SMTP_USER) return; // skip if mailer not configured
+
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.zoho.in',
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: process.env.SMTP_PORT === '465',
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+
+  await transporter.sendMail({
+    from: process.env.MAIL_FROM || '"FreeCustom.Email" <no-reply@freecustom.email>',
+    to: toEmail,
+    subject: 'Your FreeCustom.Email Pro subscription has been cancelled',
+    html: getCancellationEmailHtml(data),
+  });
+}
+
 
 // ---------------------------------------------------------------
 // Helper: Audit log
@@ -104,7 +138,7 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
 
   try {
     switch (eventType) {
-      
+
       // Paddle's subscription.canceled webhook includes:
       //   data.scheduled_change.effective_at  — when cancel takes effect (period end)
       //   data.current_billing_period.ends_at — current period end
@@ -144,21 +178,10 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
         break;
       }
 
-      // ── CANCELLED ──────────────────────────────────────────────────────────────
+      // ── CANCELLED case — replace with this ───────────────────────────────────────
       case 'CANCELLED': {
         const data = payload.rawEvent?.data;
 
-        // Always derive downgrade date from the billing period end, never a fixed offset.
-        //
-        // Scenarios this covers correctly:
-        //   • Cancel on Day 2 of a 3-day trial  → periodEnd = Day 3  (trial end)
-        //   • Cancel on Day 4 after being billed → periodEnd = next billing date
-        //   • Immediate cancel (edge case)       → falls back to canceledAt
-        //
-        // Priority:
-        //   1. scheduled_change.effective_at  — Paddle sets this for mid-period cancels
-        //   2. current_billing_period.ends_at — current period end
-        //   3. canceledAt                     — last resort
         const periodEnd: string =
           data?.scheduled_change?.effective_at ??
           data?.current_billing_period?.ends_at ??
@@ -172,23 +195,48 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           userQuery(userId),
           {
             $set: {
-              // plan stays 'pro' — user has paid for the current period
-              // status stays 'ACTIVE' — the sub IS still active until period end
-              // cancelAtPeriodEnd = true — UI shows "Cancels on <date>" instead of "CANCELLED"
               'subscription.status': 'ACTIVE',
               'subscription.cancelAtPeriodEnd': true,
               'subscription.canceledAt': cancelledAt,
               'subscription.periodEnd': periodEnd,
               'subscription.lastUpdated': new Date(),
-              scheduledDowngradeAt,             // expiry worker scans this
+              scheduledDowngradeAt,
             },
           }
         );
 
         await logPaymentEvent(userId, subscriptionId, 'subscription_cancelled', payload);
-        console.log(
-          `[Paddle Handler] User ${userId} cancelled. Pro access until ${periodEnd}.`
-        );
+        console.log(`[Paddle Handler] User ${userId} cancelled. Pro access until ${periodEnd}.`);
+
+        // Send cancellation email with live usage stats
+        try {
+          const user = await db.collection('users').findOne(userQuery(userId));
+          if (user?.email) {
+            // Count emails and storage from saved_emails
+            const [emailCountResult, storageResult] = await Promise.all([
+              db.collection('saved_emails').countDocuments({ userId: user._id }),
+              db.collection('saved_emails').aggregate([
+                { $match: { userId: user._id } },
+                { $unwind: { path: '$attachments', preserveNullAndEmptyArrays: true } },
+                { $group: { _id: null, totalBytes: { $sum: { $ifNull: ['$attachments.size', 0] } } } },
+              ]).toArray(),
+            ]);
+
+            const emailCount = emailCountResult;
+            const storageUsedMB = ((storageResult[0]?.totalBytes ?? 0) / (1024 * 1024));
+            const inboxCount = Array.isArray(user.inboxes) ? user.inboxes.length : 0;
+
+            sendCancellationEmail(user.email, {
+              periodEnd,
+              emailCount,
+              storageUsedMB,
+              inboxCount,
+            }).catch(err => console.error('[Paddle Handler] Failed to send cancellation email:', err));
+          }
+        } catch (err) {
+          console.error('[Paddle Handler] Error fetching stats for cancellation email:', err);
+        }
+
         break;
       }
 

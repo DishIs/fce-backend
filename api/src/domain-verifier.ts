@@ -15,6 +15,7 @@ import * as dns                  from 'dns/promises';
 import nodemailer                from 'nodemailer';
 import type { Transporter }      from 'nodemailer';
 import dotenv from 'dotenv';
+import { getDomainRevocationEmailHtml, getDomainWarningEmailHtml } from './email/templates';
 dotenv.config();
 
 // ── Config ───────────────────────────────────────────────────────────────────
@@ -88,113 +89,34 @@ function getTransporter(): Transporter {
     return transporter;
 }
 
-// Sent on the FIRST failure — gives users a heads-up before anything is revoked.
 async function sendWarningEmail(toEmail: string, domain: string, txtOk: boolean, mxOk: boolean) {
-    if (MAIL_DISABLED || !SMTP_USER) {
-        console.log(`  [mailer] Skipped warning email to ${toEmail} (disabled or unconfigured)`);
-        return;
-    }
-
-    const issues: string[] = [];
-    if (!txtOk) issues.push('TXT verification record is missing or incorrect');
-    if (!mxOk)  issues.push(`MX record is not pointing to <code>mx.freecustom.email</code>`);
-
-    const issueList = issues.map(i => `<li>${i}</li>`).join('\n');
-
-    await getTransporter().sendMail({
-        from:    MAIL_FROM,
-        to:      toEmail,
-        subject: `⚠️ Action required: DNS issue detected for ${domain}`,
-        html: `
-<!DOCTYPE html>
-<html>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #1a1a1a; max-width: 560px; margin: 0 auto; padding: 32px 16px;">
-  <h2 style="margin-top: 0;">DNS issue detected for <strong>${domain}</strong></h2>
-
-  <p>We ran a routine check on your custom domain and found the following problem(s):</p>
-
-  <ul style="background: #fff8e1; border-left: 4px solid #f59e0b; padding: 12px 12px 12px 28px; border-radius: 4px; margin: 20px 0;">
-    ${issueList}
-  </ul>
-
-  <p>
-    <strong>No action has been taken yet.</strong> Your domain is still active.
-    If the DNS records are not corrected within the next few hours, your domain
-    will be automatically de-verified and will stop receiving emails.
-  </p>
-
-  <a href="${APP_URL}/dashboard/domains"
-     style="display: inline-block; margin-top: 8px; padding: 10px 20px; background: #2563eb; color: #fff; border-radius: 6px; text-decoration: none; font-weight: 600;">
-    Fix DNS settings →
-  </a>
-
-  <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;" />
-  <p style="color: #6b7280; font-size: 13px; margin: 0;">
-    This is an automated message from freecustom.email. If you believe this is a
-    mistake, reply to this email and we'll look into it.
-  </p>
-</body>
-</html>`,
-    });
-
-    console.log(`  [mailer] Warning email sent to ${toEmail} for ${domain}`);
+  if (MAIL_DISABLED || !SMTP_USER) {
+    console.log(`  [mailer] Skipped warning email to ${toEmail} (disabled or unconfigured)`);
+    return;
+  }
+  await getTransporter().sendMail({
+    from:    MAIL_FROM,
+    to:      toEmail,
+    subject: `⚠️ Action required: DNS issue detected for ${domain}`,
+    html:    getDomainWarningEmailHtml(domain, txtOk, mxOk),
+  });
+  console.log(`  [mailer] Warning email sent to ${toEmail} for ${domain}`);
 }
 
-// Sent when the domain is actually revoked.
 async function sendRevocationEmail(toEmail: string, domain: string, txtOk: boolean, mxOk: boolean) {
-    if (MAIL_DISABLED || !SMTP_USER) {
-        console.log(`  [mailer] Skipped revocation email to ${toEmail} (disabled or unconfigured)`);
-        return;
-    }
-
-    const issues: string[] = [];
-    if (!txtOk) issues.push('TXT verification record was missing or incorrect');
-    if (!mxOk)  issues.push('MX record was not pointing to <code>mx.freecustom.email</code>');
-
-    const issueList = issues.map(i => `<li>${i}</li>`).join('\n');
-
-    await getTransporter().sendMail({
-        from:    MAIL_FROM,
-        to:      toEmail,
-        subject: `❌ Custom domain ${domain} has been de-verified`,
-        html: `
-<!DOCTYPE html>
-<html>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #1a1a1a; max-width: 560px; margin: 0 auto; padding: 32px 16px;">
-  <h2 style="margin-top: 0; color: #dc2626;">Custom domain de-verified: <strong>${domain}</strong></h2>
-
-  <p>
-    After multiple failed DNS checks, your custom domain <strong>${domain}</strong> has been
-    de-verified and will <strong>no longer receive emails</strong>.
-  </p>
-
-  <p>The following DNS issue(s) were detected:</p>
-
-  <ul style="background: #fef2f2; border-left: 4px solid #dc2626; padding: 12px 12px 12px 28px; border-radius: 4px; margin: 20px 0;">
-    ${issueList}
-  </ul>
-
-  <p>
-    Once you have corrected your DNS records, you can re-verify your domain from
-    your dashboard. Re-verification is instant.
-  </p>
-
-  <a href="${APP_URL}/dashboard/domains"
-     style="display: inline-block; margin-top: 8px; padding: 10px 20px; background: #2563eb; color: #fff; border-radius: 6px; text-decoration: none; font-weight: 600;">
-    Re-verify my domain →
-  </a>
-
-  <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 32px 0;" />
-  <p style="color: #6b7280; font-size: 13px; margin: 0;">
-    This is an automated message from freecustom.email. If you believe this is a
-    mistake, reply to this email and we'll look into it.
-  </p>
-</body>
-</html>`,
-    });
-
-    console.log(`  [mailer] Revocation email sent to ${toEmail} for ${domain}`);
+  if (MAIL_DISABLED || !SMTP_USER) {
+    console.log(`  [mailer] Skipped revocation email to ${toEmail} (disabled or unconfigured)`);
+    return;
+  }
+  await getTransporter().sendMail({
+    from:    MAIL_FROM,
+    to:      toEmail,
+    subject: `❌ Custom domain ${domain} has been de-verified`,
+    html:    getDomainRevocationEmailHtml(domain, txtOk, mxOk),
+  });
+  console.log(`  [mailer] Revocation email sent to ${toEmail} for ${domain}`);
 }
+
 
 // ── DNS helpers ───────────────────────────────────────────────────────────────
 
