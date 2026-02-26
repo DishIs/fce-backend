@@ -134,6 +134,31 @@ services:
       - redis
     restart: unless-stopped
 
+  subscription-expiry:
+    build:
+      context: ./api
+    container_name: maildrop-subscription-expiry
+    command: >
+      sh -c "
+        echo 'Subscription expiry worker started';
+        node dist/subscription-expiry.js;
+      "
+    environment:
+      MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      # Days after cancellation before account is downgraded (0 = immediate)
+      CANCELLATION_GRACE_DAYS: 3
+      # How often to sweep (default 6h)
+      EXPIRY_INTERVAL_MS: 21600000
+      # Must match queue.redis.ini
+      FREE_MAILBOX_SIZE: 20
+      FREE_MAILBOX_TTL: 86400
+      PLAN_CACHE_TTL: 3600
+    depends_on:
+      - mongo
+      - redis
+    restart: unless-stopped
+
   haraka:
     build:
       context: ./smtp-fast

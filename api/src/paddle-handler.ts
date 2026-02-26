@@ -2,6 +2,7 @@
 import { Request, Response } from 'express';
 import { db } from './mongo';
 import { ISubscription, IPaymentLog } from './mongo';
+import { migrateUserEmailsToPro } from './upgrade-migration';
 
 // ---------------------------------------------------------------
 // Paddle event types forwarded from Next.js webhook route
@@ -103,47 +104,119 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
 
   try {
     switch (eventType) {
-      // ——————————————————————————————————————————
+      
+      // Paddle's subscription.canceled webhook includes:
+      //   data.scheduled_change.effective_at  — when cancel takes effect (period end)
+      //   data.current_billing_period.ends_at — current period end
+      //
+      // We always schedule the downgrade at the period end, never a fixed offset.
+
+      // ── ACTIVATED ──────────────────────────────────────────────────────────────
       case 'ACTIVATED': {
         const subscriptionData: ISubscription = {
           provider: 'paddle',
           subscriptionId,
           planId: payload.priceId,
           status: payload.status === 'trialing' ? 'TRIALING' : 'ACTIVE',
+          cancelAtPeriodEnd: false,
           startTime: payload.startTime ?? new Date().toISOString(),
           payerEmail: payload.payerEmail,
           lastUpdated: new Date(),
-          ...(payload.customerId && { customerId: payload.customerId }),   // <-- NEW
+          ...(payload.customerId && { customerId: payload.customerId }),
           ...(payload.nextBilledAt && { nextBilledAt: payload.nextBilledAt }),
           ...(payload.scheduledChange && { scheduledChange: payload.scheduledChange }),
         };
 
         await db.collection('users').updateOne(
           userQuery(userId),
-          { $set: { plan: 'pro', subscription: subscriptionData } }
+          {
+            $set: { plan: 'pro', subscription: subscriptionData },
+            // Clear any pending downgrade — handles resubscribes before grace expires
+            $unset: { scheduledDowngradeAt: '' },
+          }
         );
         await logPaymentEvent(userId, subscriptionId, 'subscription_created', payload);
+        console.log(`[Paddle Handler] User ${userId} upgraded to PRO.`);
+
+        migrateUserEmailsToPro(userId).catch(err =>
+          console.error(`[Paddle Handler] Email migration failed for ${userId}:`, err)
+        );
         break;
       }
 
-
-      // ——————————————————————————————————————————
+      // ── CANCELLED ──────────────────────────────────────────────────────────────
       case 'CANCELLED': {
+        const data = payload.rawEvent?.data;
+
+        // Always derive downgrade date from the billing period end, never a fixed offset.
+        //
+        // Scenarios this covers correctly:
+        //   • Cancel on Day 2 of a 3-day trial  → periodEnd = Day 3  (trial end)
+        //   • Cancel on Day 4 after being billed → periodEnd = next billing date
+        //   • Immediate cancel (edge case)       → falls back to canceledAt
+        //
+        // Priority:
+        //   1. scheduled_change.effective_at  — Paddle sets this for mid-period cancels
+        //   2. current_billing_period.ends_at — current period end
+        //   3. canceledAt                     — last resort
+        const periodEnd: string =
+          data?.scheduled_change?.effective_at ??
+          data?.current_billing_period?.ends_at ??
+          payload.canceledAt ??
+          new Date().toISOString();
+
+        const scheduledDowngradeAt = new Date(periodEnd);
+        const cancelledAt = payload.canceledAt ?? new Date().toISOString();
+
         await db.collection('users').updateOne(
           userQuery(userId),
           {
             $set: {
-              plan: 'free',
-              'subscription.status': 'CANCELLED',
-              'subscription.canceledAt': payload.canceledAt ?? new Date().toISOString(),
+              // plan stays 'pro' — user has paid for the current period
+              // status stays 'ACTIVE' — the sub IS still active until period end
+              // cancelAtPeriodEnd = true — UI shows "Cancels on <date>" instead of "CANCELLED"
+              'subscription.status': 'ACTIVE',
+              'subscription.cancelAtPeriodEnd': true,
+              'subscription.canceledAt': cancelledAt,
+              'subscription.periodEnd': periodEnd,
               'subscription.lastUpdated': new Date(),
+              scheduledDowngradeAt,             // expiry worker scans this
             },
           }
         );
+
         await logPaymentEvent(userId, subscriptionId, 'subscription_cancelled', payload);
-        console.log(`[Paddle Handler] User ${userId} downgraded to FREE (CANCELLED).`);
+        console.log(
+          `[Paddle Handler] User ${userId} cancelled. Pro access until ${periodEnd}.`
+        );
         break;
       }
+
+      // ── PAYMENT_COMPLETED ──────────────────────────────────────────────────────
+      case 'PAYMENT_COMPLETED': {
+        // Fired on every successful charge — renewal OR conversion from trial.
+        // Clear any cancellation state in case user resubscribed within grace period.
+        await db.collection('users').updateOne(
+          userQuery(userId),
+          {
+            $set: {
+              plan: 'pro',
+              'subscription.status': 'ACTIVE',
+              'subscription.cancelAtPeriodEnd': false,
+              'subscription.lastUpdated': new Date(),
+            },
+            $unset: {
+              scheduledDowngradeAt: '',
+              'subscription.canceledAt': '',
+              'subscription.periodEnd': '',
+            },
+          }
+        );
+        await logPaymentEvent(userId, subscriptionId, 'subscription_renewed', payload);
+        console.log(`[Paddle Handler] User ${userId} payment received — plan renewed.`);
+        break;
+      }
+
 
       // ——————————————————————————————————————————
       case 'SUSPENDED': {
@@ -176,24 +249,6 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           }
         );
         console.log(`[Paddle Handler] User ${userId} subscription UPDATED.`);
-        break;
-      }
-
-      // ——————————————————————————————————————————
-      case 'PAYMENT_COMPLETED': {
-        // Successful renewal — ensure plan is PRO and status is ACTIVE
-        await db.collection('users').updateOne(
-          userQuery(userId),
-          {
-            $set: {
-              plan: 'pro',
-              'subscription.status': 'ACTIVE',
-              'subscription.lastUpdated': new Date(),
-            },
-          }
-        );
-        await logPaymentEvent(userId, subscriptionId, 'subscription_renewed', payload);
-        console.log(`[Paddle Handler] User ${userId} payment received — plan renewed.`);
         break;
       }
 

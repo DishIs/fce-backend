@@ -55,20 +55,37 @@ export interface IUserSettings {
 }
 
 export interface ISubscription {
-  provider:        'paypal' | 'paddle' | 'manual';
-  subscriptionId:  string;
-  planId?:         string;
-  status:          'TRIALING' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'EXPIRED' | 'APPROVAL_PENDING';
-  startTime:       string;
-  payerEmail?:     string;
-  payerName?:      string;
-  lastUpdated:     Date;
-  // Paddle-specific
-  customerId?:     string;   // <-- NEW: ctm_xxx — needed to generate portal sessions
-  nextBilledAt?:   string;
-  scheduledChange?: any;
-  pausedAt?:       string;
-  canceledAt?:     string;
+  provider:           'paypal' | 'paddle' | 'manual';
+  subscriptionId:     string;
+  planId?:            string;
+
+  // ── Status ──────────────────────────────────────────────────────────────
+  // 'ACTIVE'   — paid and running (including trials)
+  // 'TRIALING' — in trial period, not yet charged
+  // 'SUSPENDED'— payment failed, Paddle retrying
+  // 'CANCELLED'— set by expiry worker AFTER scheduledDowngradeAt passes
+  // 'EXPIRED'  — edge case (manual or PayPal)
+  status:             'TRIALING' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'EXPIRED' | 'APPROVAL_PENDING';
+
+  // ── Cancellation state ──────────────────────────────────────────────────
+  // cancelAtPeriodEnd: true while the sub is cancelled but still within the
+  // paid period. UI shows "Cancels on <periodEnd>" instead of a CANCELLED badge.
+  // The expiry worker sets status → CANCELLED once periodEnd has passed.
+  cancelAtPeriodEnd?: boolean;
+  periodEnd?:         string;   // ISO — when current paid period ends
+  canceledAt?:        string;   // ISO — when user clicked cancel
+
+  // ── Common fields ────────────────────────────────────────────────────────
+  startTime:          string;
+  payerEmail?:        string;
+  payerName?:         string;
+  lastUpdated:        Date;
+
+  // ── Paddle-specific ──────────────────────────────────────────────────────
+  customerId?:        string;   // ctm_xxx — needed for portal sessions
+  nextBilledAt?:      string;
+  scheduledChange?:   any;
+  pausedAt?:          string;
 }
 
 export interface IPaymentLog {
