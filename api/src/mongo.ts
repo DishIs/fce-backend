@@ -55,7 +55,7 @@ export interface IUserSettings {
 }
 
 export interface ISubscription {
-  provider: 'paypal' | 'manual';
+  provider: 'paypal' | 'paddle' | 'manual';
   subscriptionId: string;
   planId?: string;
   status: 'TRIALING' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'EXPIRED' | 'APPROVAL_PENDING';
@@ -63,6 +63,12 @@ export interface ISubscription {
   payerEmail?: string;
   payerName?: string;
   lastUpdated: Date;
+
+  // Paddle-specific fields
+  nextBilledAt?: string;
+  scheduledChange?: any;
+  pausedAt?: string;
+  canceledAt?: string;
 }
 
 export interface IPaymentLog {
