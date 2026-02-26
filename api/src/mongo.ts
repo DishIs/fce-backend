@@ -125,6 +125,7 @@ export interface IUser {
   mutedSenders: string[];
   inboxes?: string[];
   inboxHistory?: string[];
+  hadTrial?: boolean
 }
 
 export interface ISavedEmail {

@@ -52,7 +52,8 @@ export async function getUserStatusHandler(req: Request, res: Response) {
         return res.status(200).json({
             success: true,
             plan: user.plan,
-            subscriptionStatus: user.subscription?.status
+            subscriptionStatus: user.subscription?.status,
+            hadTrial: user.hadTrial || false
         });
     } catch (error) {
         console.error("Error getting user status:", error);
