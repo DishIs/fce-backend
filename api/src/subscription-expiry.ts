@@ -56,7 +56,7 @@ async function demoteInboxToFree(
   // Read all pro messages newest-first
   const entries = await redis.zRangeWithScores(proIndex, 0, -1, { REV: true });
   if (!entries || entries.length === 0) {
-    await redis.del(proIndex, proData);
+    await redis.del([proIndex, proData]);
     return;
   }
 
