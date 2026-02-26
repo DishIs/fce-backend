@@ -169,6 +169,14 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
             $unset: { scheduledDowngradeAt: '' },
           }
         );
+        // Mark that this user has consumed their trial — permanent, never unset
+        if (payload.status === 'trialing') {
+          await db.collection('users').updateOne(
+            userQuery(userId),
+            { $set: { hadTrial: true } }
+          );
+        }
+
         await logPaymentEvent(userId, subscriptionId, 'subscription_created', payload);
         console.log(`[Paddle Handler] User ${userId} upgraded to PRO.`);
 
