@@ -7,6 +7,7 @@ import { ISubscription, IPaymentLog } from './mongo';
 // Paddle event types forwarded from Next.js webhook route
 // ---------------------------------------------------------------
 type PaddleEventType =
+  | 'TRIALING'
   | 'ACTIVATED'
   | 'CANCELLED'
   | 'SUSPENDED'
@@ -16,20 +17,20 @@ type PaddleEventType =
   | 'REFUNDED';
 
 interface PaddleSubscriptionEventPayload {
-  eventType:       PaddleEventType;
-  userId?:         string;
+  eventType: PaddleEventType;
+  userId?: string;
   subscriptionId?: string;
-  priceId?:        string;
-  status?:         string;
-  startTime?:      string;
-  nextBilledAt?:   string;
-  payerEmail?:     string;
-  canceledAt?:     string;
-  pausedAt?:       string;
+  priceId?: string;
+  status?: string;
+  startTime?: string;
+  nextBilledAt?: string;
+  payerEmail?: string;
+  canceledAt?: string;
+  pausedAt?: string;
   scheduledChange?: any;
-  amount?:         string | number;
-  currency?:       string;
-  rawEvent:        any;
+  amount?: string | number;
+  currency?: string;
+  rawEvent: any;
 }
 
 // ---------------------------------------------------------------
@@ -55,9 +56,9 @@ async function logPaymentEvent(
     transactionType,
     provider: 'paddle',
     subscriptionId,
-    amount:   payload.amount !== undefined ? String(payload.amount) : undefined,
+    amount: payload.amount !== undefined ? String(payload.amount) : undefined,
     currency: payload.currency,
-    details:  payload.rawEvent,
+    details: payload.rawEvent,
     createdAt: new Date(),
   };
   await db.collection('payment_logs').insertOne(log);
@@ -104,15 +105,15 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
       // ——————————————————————————————————————————
       case 'ACTIVATED': {
         const subscriptionData: ISubscription = {
-          provider:    'paddle',
+          provider: 'paddle',
           subscriptionId,
-          planId:      payload.priceId,
-          status:      'ACTIVE',
-          startTime:   payload.startTime ?? new Date().toISOString(),
-          payerEmail:  payload.payerEmail,
+          planId: payload.priceId,
+          status: payload.status === 'trialing' ? 'TRIALING' : 'ACTIVE',
+          startTime: payload.startTime ?? new Date().toISOString(),
+          payerEmail: payload.payerEmail,
           lastUpdated: new Date(),
           // Paddle-specific extras stored on the subscription object
-          ...(payload.nextBilledAt    && { nextBilledAt:    payload.nextBilledAt }),
+          ...(payload.nextBilledAt && { nextBilledAt: payload.nextBilledAt }),
           ...(payload.scheduledChange && { scheduledChange: payload.scheduledChange }),
         };
 
@@ -132,8 +133,8 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           {
             $set: {
               plan: 'free',
-              'subscription.status':      'CANCELLED',
-              'subscription.canceledAt':  payload.canceledAt ?? new Date().toISOString(),
+              'subscription.status': 'CANCELLED',
+              'subscription.canceledAt': payload.canceledAt ?? new Date().toISOString(),
               'subscription.lastUpdated': new Date(),
             },
           }
@@ -151,8 +152,8 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           userQuery(userId),
           {
             $set: {
-              'subscription.status':      'SUSPENDED',
-              'subscription.pausedAt':    payload.pausedAt ?? new Date().toISOString(),
+              'subscription.status': 'SUSPENDED',
+              'subscription.pausedAt': payload.pausedAt ?? new Date().toISOString(),
               'subscription.lastUpdated': new Date(),
             },
           }
@@ -167,8 +168,8 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           userQuery(userId),
           {
             $set: {
-              'subscription.planId':      payload.priceId,
-              'subscription.status':      (payload.status ?? 'ACTIVE') as ISubscription['status'],
+              'subscription.planId': payload.priceId,
+              'subscription.status': (payload.status ?? 'ACTIVE') as ISubscription['status'],
               'subscription.lastUpdated': new Date(),
             },
           }
@@ -184,8 +185,8 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           userQuery(userId),
           {
             $set: {
-              plan:                       'pro',
-              'subscription.status':      'ACTIVE',
+              plan: 'pro',
+              'subscription.status': 'ACTIVE',
               'subscription.lastUpdated': new Date(),
             },
           }
@@ -203,7 +204,7 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           userQuery(userId),
           {
             $set: {
-              'subscription.status':      'SUSPENDED',
+              'subscription.status': 'SUSPENDED',
               'subscription.lastUpdated': new Date(),
             },
           }

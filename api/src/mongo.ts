@@ -58,7 +58,7 @@ export interface ISubscription {
   provider: 'paypal' | 'manual';
   subscriptionId: string;
   planId?: string;
-  status: 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'EXPIRED' | 'APPROVAL_PENDING';
+  status: 'TRIALING' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'EXPIRED' | 'APPROVAL_PENDING';
   startTime: string;
   payerEmail?: string;
   payerName?: string;
