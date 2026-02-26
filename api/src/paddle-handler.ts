@@ -20,6 +20,7 @@ interface PaddleSubscriptionEventPayload {
   eventType: PaddleEventType;
   userId?: string;
   subscriptionId?: string;
+  customerId?: string;   // <-- NEW
   priceId?: string;
   status?: string;
   startTime?: string;
@@ -112,7 +113,7 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           startTime: payload.startTime ?? new Date().toISOString(),
           payerEmail: payload.payerEmail,
           lastUpdated: new Date(),
-          // Paddle-specific extras stored on the subscription object
+          ...(payload.customerId && { customerId: payload.customerId }),   // <-- NEW
           ...(payload.nextBilledAt && { nextBilledAt: payload.nextBilledAt }),
           ...(payload.scheduledChange && { scheduledChange: payload.scheduledChange }),
         };
@@ -122,9 +123,9 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           { $set: { plan: 'pro', subscription: subscriptionData } }
         );
         await logPaymentEvent(userId, subscriptionId, 'subscription_created', payload);
-        console.log(`[Paddle Handler] User ${userId} upgraded to PRO.`);
         break;
       }
+
 
       // ——————————————————————————————————————————
       case 'CANCELLED': {

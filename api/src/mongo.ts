@@ -55,20 +55,20 @@ export interface IUserSettings {
 }
 
 export interface ISubscription {
-  provider: 'paypal' | 'paddle' | 'manual';
-  subscriptionId: string;
-  planId?: string;
-  status: 'TRIALING' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'EXPIRED' | 'APPROVAL_PENDING';
-  startTime: string;
-  payerEmail?: string;
-  payerName?: string;
-  lastUpdated: Date;
-
-  // Paddle-specific fields
-  nextBilledAt?: string;
+  provider:        'paypal' | 'paddle' | 'manual';
+  subscriptionId:  string;
+  planId?:         string;
+  status:          'TRIALING' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'EXPIRED' | 'APPROVAL_PENDING';
+  startTime:       string;
+  payerEmail?:     string;
+  payerName?:      string;
+  lastUpdated:     Date;
+  // Paddle-specific
+  customerId?:     string;   // <-- NEW: ctm_xxx — needed to generate portal sessions
+  nextBilledAt?:   string;
   scheduledChange?: any;
-  pausedAt?: string;
-  canceledAt?: string;
+  pausedAt?:       string;
+  canceledAt?:     string;
 }
 
 export interface IPaymentLog {
