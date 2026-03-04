@@ -45,7 +45,7 @@ async function hydrateAttachments(attachments: any[]): Promise<any[]> {
             const downloadStream = gfs.openDownloadStream(
                 typeof gridfsId === 'string' ? new ObjectId(gridfsId) : gridfsId
             );
-            const chunks: Buffer[] = [];
+            const chunks: Uint8Array[] = [];
             for await (const chunk of downloadStream) chunks.push(chunk);
             return {
                 ...att,
