@@ -31,6 +31,9 @@ export async function connectToMongo() {
     await db.collection('users').createIndex({ linkedProviderIds: 1 });
     await db.collection('users').createIndex({ email: 1 });    // for email lookup
 
+    await db.collection('api_keys').createIndex({ keyHash: 1 }, { unique: true });
+    await db.collection('api_keys').createIndex({ wyiUserId: 1 });
+    await db.collection('users').createIndex({ apiInboxes: 1 });
 
     return { db, gfs };
   } catch (error) {
@@ -55,9 +58,9 @@ export interface IUserSettings {
 }
 
 export interface ISubscription {
-  provider:           'paypal' | 'paddle' | 'manual';
-  subscriptionId:     string;
-  planId?:            string;
+  provider: 'paypal' | 'paddle' | 'manual';
+  subscriptionId: string;
+  planId?: string;
 
   // ── Status ──────────────────────────────────────────────────────────────
   // 'ACTIVE'   — paid and running (including trials)
@@ -65,27 +68,27 @@ export interface ISubscription {
   // 'SUSPENDED'— payment failed, Paddle retrying
   // 'CANCELLED'— set by expiry worker AFTER scheduledDowngradeAt passes
   // 'EXPIRED'  — edge case (manual or PayPal)
-  status:             'TRIALING' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'EXPIRED' | 'APPROVAL_PENDING';
+  status: 'TRIALING' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'EXPIRED' | 'APPROVAL_PENDING';
 
   // ── Cancellation state ──────────────────────────────────────────────────
   // cancelAtPeriodEnd: true while the sub is cancelled but still within the
   // paid period. UI shows "Cancels on <periodEnd>" instead of a CANCELLED badge.
   // The expiry worker sets status → CANCELLED once periodEnd has passed.
   cancelAtPeriodEnd?: boolean;
-  periodEnd?:         string;   // ISO — when current paid period ends
-  canceledAt?:        string;   // ISO — when user clicked cancel
+  periodEnd?: string;   // ISO — when current paid period ends
+  canceledAt?: string;   // ISO — when user clicked cancel
 
   // ── Common fields ────────────────────────────────────────────────────────
-  startTime:          string;
-  payerEmail?:        string;
-  payerName?:         string;
-  lastUpdated:        Date;
+  startTime: string;
+  payerEmail?: string;
+  payerName?: string;
+  lastUpdated: Date;
 
   // ── Paddle-specific ──────────────────────────────────────────────────────
-  customerId?:        string;   // ctm_xxx — needed for portal sessions
-  nextBilledAt?:      string;
-  scheduledChange?:   any;
-  pausedAt?:          string;
+  customerId?: string;   // ctm_xxx — needed for portal sessions
+  nextBilledAt?: string;
+  scheduledChange?: any;
+  pausedAt?: string;
 }
 
 export interface IPaymentLog {
@@ -126,6 +129,13 @@ export interface IUser {
   inboxes?: string[];
   inboxHistory?: string[];
   hadTrial?: boolean
+
+  // ── Developer API (v1) — NEW ──────────────────────────────────────────────
+  apiPlan?: 'free' | 'developer' | 'startup' | 'growth' | 'enterprise';
+  apiCredits?: number;   // never-expiring request credits
+  apiInboxes?: string[]; // inboxes registered via POST /v1/inboxes
+  fcmToken?: string;
+
 }
 
 export interface ISavedEmail {
@@ -136,4 +146,16 @@ export interface ISavedEmail {
   subject: string;
   date: Date;
   attachments?: any[];
+}
+
+export interface IApiKey {
+  _id?: any;
+  wyiUserId: string;           // owner (canonical wyiUserId)
+  keyHash: string;           // SHA-256 of the raw key — NEVER store raw
+  keyPrefix: string;           // first 12 chars (e.g. "fce_a1b2c3d4") — safe to display
+  name: string;           // user-assigned label
+  active: boolean;
+  createdAt: Date;
+  lastUsedAt: Date | null;
+  revokedAt?: Date;
 }

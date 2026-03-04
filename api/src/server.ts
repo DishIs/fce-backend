@@ -1,3 +1,4 @@
+// server.ts  (updated — v1 public API added)
 import express from 'express';
 import { createServer } from 'http';
 import WebSocket from 'ws';
@@ -18,14 +19,27 @@ import {
   updateSettingsHandler,
   getSettingsHandler,
   upgradeUserSubscriptionHandler,
-  saveFcmTokenHandler
+  saveFcmTokenHandler,
 } from './user';
 import { deleteDomainHandler, getDashboardDataHandler, verifyDomainHandler } from './domain-handler';
 import { addInboxHandler } from './inbox-handler';
 import { domainsHandler } from './domains';
 import { handlePaddleSubscriptionEvent } from './paddle-handler';
-import jwt from 'jsonwebtoken';
 
+// ── v1 public API ─────────────────────────────────────────────────────────────
+import { createPublicV1Router } from './v1/router';
+import { handleApiWebSocket, notifyApiWsClients } from './v1/ws-handler';
+import {
+  generateApiKeyHandler,
+  listApiKeysHandler,
+  revokeApiKeyHandler,
+  setApiPlanHandler,
+  addApiCreditsHandler,
+} from './v1/api-key-handler';
+
+import jwt from 'jsonwebtoken';
+import { getApiStatusHandler } from './api-status-handler';
+import { getPaymentLogsHandler } from './payment-logs-handler';
 
 dotenv.config();
 
@@ -34,46 +48,50 @@ connectToMongo().then(() => {
   const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
 
   if (!INTERNAL_API_KEY) {
-    throw new Error("FATAL: INTERNAL_API_KEY is not set. The service cannot run securely.");
+    throw new Error('FATAL: INTERNAL_API_KEY is not set. The service cannot run securely.');
   }
 
-  const internalApiAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const internalApiAuth = (
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
     const providedKey = req.header('x-internal-api-key');
-    if (providedKey && providedKey === INTERNAL_API_KEY) {
-      return next();
-    }
+    if (providedKey && providedKey === INTERNAL_API_KEY) return next();
     return res.status(401).json({ success: false, message: 'Unauthorized: Invalid or missing API key.' });
   };
 
   app.use(express.json());
 
+  // ── Internal API auth — skip for WebSocket upgrades AND /v1 routes ────────
   app.use((req, res, next) => {
-    if (req.headers.upgrade && req.headers.upgrade.toLowerCase() === 'websocket') {
-      next();
-    } else {
-      internalApiAuth(req, res, next);
-    }
+    const isWsUpgrade = req.headers.upgrade?.toLowerCase() === 'websocket';
+    const isV1 = req.path.startsWith('/v1');
+    if (isWsUpgrade || isV1) return next();
+    return internalApiAuth(req, res, next);
   });
 
   const server = createServer(app);
   const wss = new WebSocket.Server({ server });
   const PORT = process.env.PORT || 3000;
 
-  // --- API Routes ---
+  // ─────────────────────────────────────────────────────────────────────────
+  // Internal API Routes (protected by INTERNAL_API_KEY)
+  // ─────────────────────────────────────────────────────────────────────────
 
-  // Public Mailbox Routes (Protected by API Key, accessed by Frontend)
+  // Mailbox
   app.get('/mailbox/:name', listHandler);
   app.get('/mailbox/:name/message/:id', messageHandler);
   app.delete('/mailbox/:name/message/:id', deleteHandler);
 
   // Auth & User Lifecycle
   app.post('/auth/upsert-user', upsertUserHandler);
-  app.post('/user/status', getUserStatusHandler); // NEW: Get Plan/Sub status
+  app.post('/user/status', getUserStatusHandler);
   app.get('/user/profile/:wyiUserId', getUserProfileHandler);
 
   // Settings & Dashboard
-  app.post('/user/settings', updateSettingsHandler); // NEW: Update Settings
-  app.post('/user/get-settings', getSettingsHandler); // NEW: Get Settings
+  app.post('/user/settings', updateSettingsHandler);
+  app.post('/user/get-settings', getSettingsHandler);
   app.get('/user/:wyiUserId/dashboard-data', getDashboardDataHandler);
   app.get('/user/:wyiUserId/storage', getUserStorageHandler);
 
@@ -89,73 +107,93 @@ connectToMongo().then(() => {
   app.post('/user/inboxes', addInboxHandler);
 
   // FCM / Notifications
-  app.post('/user/fcm-token', saveFcmTokenHandler); // <--- ADD THIS LINE
+  app.post('/user/fcm-token', saveFcmTokenHandler);
 
-
-  // Billing (Internal/NextJS callback)
-  app.post('/user/upgrade', upgradeUserSubscriptionHandler); // NEW: Upgrade to Pro
-
-  // Paddle webhook event relay
+  // Billing
+  app.post('/user/upgrade', upgradeUserSubscriptionHandler);
   app.post('/paddle/subscription-event', handlePaddleSubscriptionEvent);
+  // Billing history (payment logs)
+  // ?limit=50  ?offset=0  ?type=app|api|credits
+  app.get('/user/payment-logs/:wyiUserId', getPaymentLogsHandler);
+
+
+  // ── API key management (internal — called by the Next.js dashboard) ─────
+  app.post('/user/api-keys', generateApiKeyHandler);
+  app.get('/user/api-keys/:wyiUserId', listApiKeysHandler);
+  app.delete('/user/api-keys', revokeApiKeyHandler);
+  app.post('/user/api-plan', setApiPlanHandler);
+  app.post('/user/api-credits', addApiCreditsHandler);
 
   app.get('/domains', domainsHandler);
-
-  // Health
   app.get('/health', statsHandler);
 
+  // API status (plan, credits, usage, feature flags, upsell nudges)
+  app.get('/user/api-status/:wyiUserId', getApiStatusHandler);
 
-  // --- WebSocket Logic ---
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Public Developer API — /v1  (no internal key, API-key auth per request)
+  // Mounted on api.freecustom.email/v1 via Nginx proxy_pass
+  // ─────────────────────────────────────────────────────────────────────────
+  app.use('/v1', createPublicV1Router());
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // WebSocket logic
+  // ─────────────────────────────────────────────────────────────────────────
   const mailboxClients: Record<string, Set<WebSocket>> = {};
 
   async function sendStatsToAllStatsClients() {
-    const statsClients = mailboxClients["stats"];
+    const statsClients = mailboxClients['stats'];
     if (!statsClients || statsClients.size === 0) return;
-
     try {
-      const [queued, denied] = await Promise.all([getStats("queued"), getStats("denied")]);
-      const statsPayload = JSON.stringify({ type: "stats", queued, denied });
+      const [queued, denied] = await Promise.all([getStats('queued'), getStats('denied')]);
+      const payload = JSON.stringify({ type: 'stats', queued, denied });
       for (const ws of statsClients) {
-        if (ws.readyState === WebSocket.OPEN) ws.send(statsPayload);
+        if (ws.readyState === WebSocket.OPEN) ws.send(payload);
       }
     } catch (err) {
-      console.error('Error fetching or sending stats via WS:', err);
+      console.error('Error sending stats via WS:', err);
     }
   }
 
   wss.on('connection', (ws: WebSocket, req) => {
     const urlParams = new URLSearchParams(req.url?.split('?')[1] ?? '');
+
+    // ── Route API WebSocket connections (/v1/ws) ──────────────────────────
+    if (req.url?.startsWith('/v1/ws')) {
+      handleApiWebSocket(ws, req);
+      return;
+    }
+
+    // ── Internal dashboard WebSocket (existing logic) ─────────────────────
     const mailbox = urlParams.get('mailbox');
     const wsToken = urlParams.get('token');
 
     if (!mailbox) { ws.close(1008, 'Missing mailbox'); return; }
 
-    // Verify the ticket
     try {
-      const decoded = jwt.verify(wsToken ?? '', process.env.JWT_SECRET!) as jwt.JwtPayload;
+      const decoded = jwt.verify(
+        wsToken ?? '',
+        process.env.JWT_SECRET!,
+      ) as jwt.JwtPayload;
 
-      // Ensure the token was issued for THIS mailbox — prevents token reuse
       if (decoded.mailbox !== mailbox) {
         ws.close(1008, 'Token mailbox mismatch');
         return;
       }
-    } catch (err) {
+    } catch {
       ws.close(1008, 'Unauthorized');
       return;
     }
 
-
     if (!mailboxClients[mailbox]) mailboxClients[mailbox] = new Set();
     mailboxClients[mailbox].add(ws);
 
-    if (mailbox === 'stats') {
-      sendStatsToAllStatsClients();
-    }
+    if (mailbox === 'stats') sendStatsToAllStatsClients();
 
     ws.on('close', () => {
-      if (mailboxClients[mailbox]) {
-        mailboxClients[mailbox].delete(ws);
-        if (mailboxClients[mailbox].size === 0) delete mailboxClients[mailbox];
-      }
+      mailboxClients[mailbox]?.delete(ws);
+      if (mailboxClients[mailbox]?.size === 0) delete mailboxClients[mailbox];
     });
   });
 
@@ -174,19 +212,24 @@ connectToMongo().then(() => {
       try {
         const event = JSON.parse(message);
         const mailbox = channel.split(':')[2];
+
         if (mailbox === 'stats') {
           sendStatsToAllStatsClients();
           return;
         }
+
+        // Internal dashboard clients
         notifyMailbox(mailbox, event);
+
+        // ── Also push to API WebSocket clients subscribed to this inbox ──
+        notifyApiWsClients(mailbox, event);
       } catch (e) {
-        console.error('Failed to handle new mail pub/sub message:', e);
+        console.error('Failed to handle pub/sub message:', e);
       }
     });
 
-    await subscriber.pSubscribe('__keyevent@*__:set', async (message, channel) => {
-      const key = message;
-      if (key === 'stats:queued' || key === 'stats:denied') {
+    await subscriber.pSubscribe('__keyevent@*__:set', async (message) => {
+      if (message === 'stats:queued' || message === 'stats:denied') {
         await sendStatsToAllStatsClients();
       }
     });
@@ -194,5 +237,6 @@ connectToMongo().then(() => {
 
   server.listen(PORT, () => {
     console.log(`Server + WS running on http://localhost:${PORT}`);
+    console.log(`Public API available at /v1`);
   });
 });
