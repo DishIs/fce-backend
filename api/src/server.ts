@@ -40,6 +40,7 @@ import {
 import jwt from 'jsonwebtoken';
 import { getApiStatusHandler } from './api-status-handler';
 import { getPaymentLogsHandler } from './payment-logs-handler';
+import { requestDeleteAccountHandler, restoreAccountHandler, getDeletionListHandler } from './deletion-handler';
 
 dotenv.config();
 
@@ -88,6 +89,11 @@ connectToMongo().then(() => {
   app.post('/auth/upsert-user', upsertUserHandler);
   app.post('/user/status', getUserStatusHandler);
   app.get('/user/profile/:wyiUserId', getUserProfileHandler);
+
+  // Account deletion (7-day cooldown, then permanent by worker)
+  app.post('/user/delete-account', requestDeleteAccountHandler);
+  app.post('/user/restore-account', restoreAccountHandler);
+  app.get('/user/deletion-list', getDeletionListHandler);
 
   // Settings & Dashboard
   app.post('/user/settings', updateSettingsHandler);

@@ -34,6 +34,9 @@ export async function connectToMongo() {
     await db.collection('api_keys').createIndex({ keyHash: 1 }, { unique: true });
     await db.collection('api_keys').createIndex({ wyiUserId: 1 });
     await db.collection('users').createIndex({ apiInboxes: 1 });
+    await db.collection('users').createIndex({ scheduledDeletionAt: 1, deletionStatus: 1 });
+    await db.collection('deletion_cooldowns').createIndex({ type: 1, value: 1 }, { unique: true });
+    await db.collection('deletion_cooldowns').createIndex({ blockedUntil: 1 });
 
     return { db, gfs };
   } catch (error) {
@@ -136,6 +139,20 @@ export interface IUser {
   apiInboxes?: string[]; // inboxes registered via POST /v1/inboxes
   fcmToken?: string;
 
+  // ── Account deletion (soft delete → permanent by worker) ────────────────────
+  deletionStatus?: 'none' | 'scheduled' | 'permanent';
+  deletionRequestedAt?: Date;
+  scheduledDeletionAt?: Date;   // cooldown end: after this, worker deletes permanently
+  ipAtDeletionRequest?: string; // for 24h IP cooldown after permanent delete
+}
+
+/** Cooldown after account deletion: email cannot re-register for 7–14 days, IP for 24h */
+export interface IDeletionCooldown {
+  _id?: any;
+  type: 'email' | 'ip';
+  value: string;        // normalized email or IP
+  blockedUntil: Date;
+  createdAt?: Date;
 }
 
 export interface ISavedEmail {

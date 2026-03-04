@@ -3,6 +3,7 @@ import { client as redisClient } from './redis';
 import { IUser, IUserSettings, ISubscription, IPaymentLog } from './mongo';
 import { v4 as uuidv4 } from 'uuid';
 import { Request, Response } from 'express';
+import { isEmailInDeletionCooldown, isIpInDeletionCooldown } from './deletion-cooldown';
 
 // ── Flatten nested settings (e.g. settings.settings.settings...) ─────────────
 // Recursively merges any "settings" key into the parent so we never persist
@@ -35,7 +36,7 @@ export async function getUser(userId: string): Promise<IUser | null> {
 // ------------------------------------------------------------------
 
 export async function getUserStatusHandler(req: Request, res: Response) {
-    const { userId } = req.body;
+    const { userId, ip } = req.body;
 
     if (!userId) {
         return res.status(400).json({ success: false, message: 'User ID required' });
@@ -47,11 +48,19 @@ export async function getUserStatusHandler(req: Request, res: Response) {
             return res.status(404).json({ success: false, message: 'User not found' });
         }
 
+        const u = user as any;
+        const deletionStatus = u.deletionStatus || 'none';
+        const scheduledDeletionAt = u.scheduledDeletionAt ? new Date(u.scheduledDeletionAt) : null;
+        const canRestoreUntil = deletionStatus === 'scheduled' && scheduledDeletionAt ? scheduledDeletionAt.toISOString() : null;
+
         return res.status(200).json({
             success: true,
             plan: user.plan,
             subscriptionStatus: user.subscription?.status,
-            hadTrial: user.hadTrial || false
+            hadTrial: user.hadTrial || false,
+            deletion_status: deletionStatus,
+            deletion_scheduled_at: scheduledDeletionAt ? scheduledDeletionAt.toISOString() : null,
+            can_restore_until: canRestoreUntil,
         });
     } catch (error) {
         console.error("Error getting user status:", error);
@@ -180,18 +189,40 @@ export async function upgradeUserSubscriptionHandler(req: Request, res: Response
 // ------------------------------------------------------------------
 
 export async function upsertUserHandler(req: Request, res: Response) {
-    const { wyiUserId, email, name, plan } = req.body;
+    const { wyiUserId, email, name, plan, ip } = req.body;
 
     if (!wyiUserId || !email || !name) {
         return res.status(400).json({ success: false, message: 'Missing required user data.' });
     }
 
     try {
+        if (ip && (await isIpInDeletionCooldown(ip))) {
+            return res.status(403).json({
+                success: false,
+                message: 'Registration from this network is temporarily blocked. Please try again later.',
+            });
+        }
+        if (await isEmailInDeletionCooldown(email)) {
+            return res.status(403).json({
+                success: false,
+                message: 'This email address cannot register for a short period after account deletion. Please try again later.',
+            });
+        }
+
         const usersCollection = db.collection('users');
 
         const exactMatch = await usersCollection.findOne({ wyiUserId });
 
         if (exactMatch) {
+            const delStatus = (exactMatch as any).deletionStatus;
+            if (delStatus === 'scheduled' || delStatus === 'permanent') {
+                return res.status(403).json({
+                    success: false,
+                    message: delStatus === 'permanent'
+                        ? 'This account was permanently deleted and cannot log in.'
+                        : 'This account is scheduled for deletion. Restore it from the dashboard to log in again.',
+                });
+            }
             const planToSet = exactMatch.plan === 'pro' ? 'pro' : (plan || 'free');
             await usersCollection.updateOne(
                 { wyiUserId },
@@ -212,6 +243,15 @@ export async function upsertUserHandler(req: Request, res: Response) {
         });
 
         if (emailMatch) {
+            const delStatus = (emailMatch as any).deletionStatus;
+            if (delStatus === 'scheduled' || delStatus === 'permanent') {
+                return res.status(403).json({
+                    success: false,
+                    message: delStatus === 'permanent'
+                        ? 'This account was permanently deleted and cannot log in.'
+                        : 'This account is scheduled for deletion. Restore it from the dashboard to log in again.',
+                });
+            }
             await usersCollection.updateOne(
                 { _id: emailMatch._id },
                 {

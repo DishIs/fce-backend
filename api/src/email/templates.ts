@@ -272,6 +272,35 @@ export function getDomainRevocationEmailHtml(domain: string, txtOk: boolean, mxO
   return layout(content, "You're receiving this because you have a verified custom domain on FreeCustom.Email and we run periodic DNS health checks.");
 }
 
+// ── Account deletion (scheduled) ──────────────────────────────────────────────
+export function getDeletionScheduledEmailHtml(scheduledDeletionAt: Date, appUrl: string): string {
+  const dateStr = new Date(scheduledDeletionAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const content = `
+    <p style="margin:0 0 8px;font-size:20px;font-weight:600;color:#111;">Account scheduled for deletion</p>
+    <p style="margin:0 0 20px;">${pill('Cooldown period', '#92400e', '#fef3c7')}&nbsp;&nbsp;<span style="font-size:13px;color:#888;">Permanent deletion: <strong style="color:#111;">${dateStr}</strong></span></p>
+    <p style="margin:0 0 24px;font-size:14px;color:#666;line-height:1.6;">
+      We've removed your stored emails, attachments, and inbox addresses. Your account can still be <strong>restored</strong> until the date above.
+    </p>
+    <p style="margin:0 0 24px;font-size:14px;color:#444;line-height:1.6;">
+      After that date, your account will be permanently deleted and you will not be able to log in or restore it.
+    </p>
+    ${ctaButton(`${appUrl}/dashboard`, 'Restore my account →')}
+    <p style="margin:24px 0 0;font-size:12px;color:#999;line-height:1.6;">If you did not request this, please restore your account and secure it.</p>`;
+  return layout(content, "You requested account deletion on FreeCustom.Email. This email confirms the schedule and your option to restore.");
+}
+
+// ── Account deletion (permanent) ──────────────────────────────────────────────
+export function getDeletionPermanentEmailHtml(): string {
+  const content = `
+    <p style="margin:0 0 8px;font-size:20px;font-weight:600;color:#111;">Account permanently deleted</p>
+    <p style="margin:0 0 20px;">${pill('Done', '#166534', '#dcfce7')}</p>
+    <p style="margin:0 0 24px;font-size:14px;color:#666;line-height:1.6;">
+      Your FreeCustom.Email account has been permanently deleted as requested. All account data has been removed.
+    </p>
+    <p style="margin:0 0 0;font-size:12px;color:#999;line-height:1.6;">You can sign up again later if you choose. Thank you for having used our service.</p>`;
+  return layout(content, "You had requested account deletion on FreeCustom.Email. This confirms the process is complete.");
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 //  DEVELOPER API TEMPLATES  (devLayout — "for developers" branding)
 // ═════════════════════════════════════════════════════════════════════════════

@@ -132,6 +132,20 @@ services:
       - redis
     restart: unless-stopped
 
+  deletion-worker:
+    build:
+      context: ./api
+    container_name: maildrop-deletion-worker
+    command: node dist/deletion-worker.js
+    environment:
+      MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
+      DELETION_WORKER_INTERVAL_MS: 3600000
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      APP_URL: https://www.freecustom.email
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
   subscription-expiry:
     build:
       context: ./api
