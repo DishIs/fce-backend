@@ -2,6 +2,7 @@
 import { Request, Response } from 'express';
 import { db } from './mongo';
 import { client } from './redis';
+import { DOMAINS } from './domains';
 
 export async function addInboxHandler(req: Request, res: Response): Promise<any> {
   const { wyiUserId, inboxName } = req.body;
@@ -12,17 +13,41 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
 
   const normalizedInbox = inboxName.trim().toLowerCase();
 
+  // Basic email format check
+  if (!/^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$/.test(normalizedInbox)) {
+    return res.status(400).json({
+      success: false,
+      message: "Please enter a valid email address (e.g. myinbox@ditube.info).",
+    });
+  }
+
+  const domain = normalizedInbox.split('@')[1];
+
   try {
     // UPDATED: Check for user via wyiUserId OR linkedProviderIds
-    const user = await db.collection('users').findOne({ 
+    const user = await db.collection('users').findOne({
       $or: [
         { wyiUserId: wyiUserId },
-        { linkedProviderIds: wyiUserId }
-      ]
+        { linkedProviderIds: wyiUserId },
+      ],
     });
 
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found." });
+    }
+
+    // Allowed domains: our provided domains + user's verified custom domains (pro only)
+    const allowedDomains = new Set<string>(DOMAINS.map((d: string) => d.toLowerCase()));
+    if (user.plan === 'pro' && Array.isArray(user.customDomains)) {
+      user.customDomains
+        .filter((d: { verified?: boolean }) => d.verified === true)
+        .forEach((d: { domain: string }) => allowedDomains.add(d.domain.toLowerCase()));
+    }
+    if (!allowedDomains.has(domain)) {
+      return res.status(400).json({
+        success: false,
+        message: `Domain "${domain}" is not supported. Use an address at one of our provided domains (e.g. @ditube.info) or add and verify your custom domain in Settings.`,
+      });
     }
 
     let inboxes: string[] = Array.isArray(user.inboxes)

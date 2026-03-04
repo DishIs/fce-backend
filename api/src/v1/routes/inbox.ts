@@ -115,36 +115,38 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
   }
 
   const domain = normalized.split('@')[1];
-  const providedDomains = DOMAINS as string[];
-  const isProvidedDomain = providedDomains.includes(domain);
+  const providedDomains: string[] = [...DOMAINS];
 
-  // ── Domain validation: only our provided domains or user's verified custom domains ──
-  if (!isProvidedDomain) {
-    // Custom domain: require Growth plan or above
+  // Build explicit allow-list: only our provided domains + user's verified custom domains (if plan allows)
+  const allowedDomains = new Set<string>(providedDomains);
+  if (CUSTOM_DOMAIN_PLANS.includes(apiUser.plan)) {
+    const userDoc = await db.collection('users').findOne(
+      { wyiUserId: apiUser.userId },
+      { projection: { customDomains: 1 } },
+    );
+    const verifiedCustom = (userDoc?.customDomains ?? []).filter((d: { domain: string; verified?: boolean }) => d.verified === true);
+    verifiedCustom.forEach((d: { domain: string }) => allowedDomains.add(d.domain.toLowerCase()));
+  }
+
+  if (!allowedDomains.has(domain)) {
     if (!CUSTOM_DOMAIN_PLANS.includes(apiUser.plan)) {
       return res.status(403).json({
         success: false,
-        error: 'plan_required',
-        message: `Custom domain inboxes require Growth plan or above. Your plan: ${apiUser.plan}. Use an address at one of our provided domains, e.g. something@ditube.info`,
+        error: 'domain_not_allowed',
+        message: `Domain "${domain}" is not supported. Use an inbox at one of our provided domains (e.g. something@ditube.info). Custom domains require Growth plan or above.`,
+        provided_domains_example: 'ditube.info',
         upgrade_url: 'https://freecustom.email/api/pricing',
       });
     }
-
-    // Must be added and verified under this account
-    const userWithDomain = await db.collection('users').findOne({
-      wyiUserId: apiUser.userId,
-      'customDomains.domain': domain,
-      'customDomains.verified': true,
+    return res.status(403).json({
+      success: false,
+      error: 'domain_not_allowed',
+      message: `Domain "${domain}" is not supported. Use an inbox at one of our provided domains (e.g. @ditube.info) or add and verify "${domain}" in your dashboard.`,
+      provided_domains_example: 'ditube.info',
     });
-    if (!userWithDomain) {
-      return res.status(403).json({
-        success: false,
-        error: 'domain_not_allowed',
-        message: `Domain "${domain}" is not supported. Use an inbox at one of our provided domains (e.g. @ditube.info) or add and verify "${domain}" in your dashboard.`,
-        provided_domains_example: 'ditube.info',
-      });
-    }
   }
+
+  const isProvidedDomain = providedDomains.includes(domain);
 
   try {
     const user = await db.collection('users').findOne({ wyiUserId: apiUser.userId });
