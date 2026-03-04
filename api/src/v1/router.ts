@@ -26,20 +26,24 @@ v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {
   try {
     const user = await db.collection('users').findOne(
       { wyiUserId: apiUser.userId },
-      { projection: { wyiUserId: 1, email: 1, apiPlan: 1, apiCredits: 1, apiInboxes: 1 } },
+      { projection: { wyiUserId: 1, email: 1, apiPlan: 1, apiCredits: 1, apiInboxes: 1, inboxes: 1 } },
     );
+    const appInboxesList = Array.isArray(user?.inboxes) ? user.inboxes.map((i: any) => String(i).toLowerCase()) : [];
+    const apiInboxesList = user?.apiInboxes ?? [];
 
     return res.json({
       success: true,
       data: {
-        plan:         apiUser.plan,
-        plan_label:   API_PLANS[apiUser.plan].label,
-        price:        `$${API_PLANS[apiUser.plan].price}/mo`,
-        credits:      user?.apiCredits ?? 0,
-        rate_limits:  apiUser.planConfig.rateLimit,
-        features:     apiUser.planConfig.features,
-        inboxes:      user?.apiInboxes ?? [],
-        inbox_count:  user?.apiInboxes?.length ?? 0,
+        plan:            apiUser.plan,
+        plan_label:      API_PLANS[apiUser.plan].label,
+        price:           `$${API_PLANS[apiUser.plan].price}/mo`,
+        credits:         user?.apiCredits ?? 0,
+        rate_limits:     apiUser.planConfig.rateLimit,
+        features:        apiUser.planConfig.features,
+        app_inboxes:     appInboxesList,
+        app_inbox_count: appInboxesList.length,
+        api_inboxes:     apiInboxesList,
+        api_inbox_count: apiInboxesList.length,
       },
     });
   } catch {

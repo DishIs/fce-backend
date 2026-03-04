@@ -233,49 +233,68 @@ function extractVerificationLink(html, text) {
     return bestScore > 0 ? best : null;
 }
 
+// Map API plan (api_inboxes) to internal tier. Must match api/src/v1/api-plans.ts apiPlanToInternalPlan.
+function apiPlanToInternalPlan(apiPlan) {
+    if (!apiPlan) return 'anonymous';
+    const p = String(apiPlan).toLowerCase();
+    if (p === 'growth' || p === 'enterprise') return 'pro';
+    if (p === 'free') return 'anonymous';
+    return 'free'; // developer, startup
+}
+
 async function getUserData(recipientEmail) {
     if (!db || !redisClient.isOpen) return { plan: 'anonymous', userId: null, isVerified: false };
 
-    try {
-        const cacheKey = `user_data_cache:${recipientEmail}`;
-        const cachedData = await redisClient.get(cacheKey);
+    const normalized = recipientEmail.toLowerCase();
+    const cacheKey = `user_data_cache:${normalized}`;
+    const ttl = parseInt(plugin.cfg.main.plan_cache_ttl, 10) || 3600;
 
+    try {
+        const cachedData = await redisClient.get(cacheKey);
         if (cachedData) {
             const data = JSON.parse(cachedData);
             data.userId = data.userId ? new ObjectId(data.userId) : null;
             return data;
         }
 
-        const parts = recipientEmail.split('@');
+        const parts = normalized.split('@');
         const recipientDomain = parts.length > 1 ? parts[1] : '';
-        const ttl = parseInt(plugin.cfg.main.plan_cache_ttl, 10) || 3600;
-
         let user;
         let userData;
 
+        // 1) API inboxes: use user's API plan (free/developer/startup/growth/enterprise) → internal tier
+        user = await db.collection('users').findOne({ apiInboxes: normalized });
+        if (user) {
+            const internalPlan = apiPlanToInternalPlan(user.apiPlan);
+            userData = { plan: internalPlan, userId: user._id, isVerified: false };
+            await redisClient.set(cacheKey, JSON.stringify({ plan: internalPlan, userId: user._id.toString(), isVerified: false }), { EX: ttl });
+            return userData;
+        }
+
+        // 2) Custom domains (pro)
         user = await db.collection('users').findOne({
             plan: 'pro',
             'customDomains.domain': recipientDomain,
             'customDomains.verified': true
         });
-
         if (user) {
             userData = { plan: 'pro', userId: user._id, isVerified: true };
-            await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
+            await redisClient.set(cacheKey, JSON.stringify({ plan: 'pro', userId: user._id.toString(), isVerified: true }), { EX: ttl });
             return userData;
         }
 
-        user = await db.collection('users').findOne({ plan: 'pro', inboxes: recipientEmail });
+        // 3) App inboxes: use user's app plan (free/pro)
+        user = await db.collection('users').findOne({ plan: 'pro', inboxes: normalized });
         if (user) {
             userData = { plan: 'pro', userId: user._id, isVerified: false };
-            await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
+            await redisClient.set(cacheKey, JSON.stringify({ plan: 'pro', userId: user._id.toString(), isVerified: false }), { EX: ttl });
             return userData;
         }
 
-        user = await db.collection('users').findOne({ plan: 'free', inboxes: recipientEmail });
+        user = await db.collection('users').findOne({ plan: 'free', inboxes: normalized });
         if (user) {
             userData = { plan: 'free', userId: user._id, isVerified: false };
-            await redisClient.set(cacheKey, JSON.stringify(userData), { EX: ttl });
+            await redisClient.set(cacheKey, JSON.stringify({ plan: 'free', userId: user._id.toString(), isVerified: false }), { EX: ttl });
             return userData;
         }
 

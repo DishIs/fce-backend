@@ -58,6 +58,7 @@ export async function getApiStatusHandler(req: Request, res: Response): Promise<
     const plan: ApiPlanName           = (user.apiPlan as ApiPlanName) ?? 'free';
     const planConfig                  = API_PLANS[plan];
     const credits: number             = user.apiCredits ?? 0;
+    const appInboxes: string[]        = Array.isArray(user.inboxes) ? user.inboxes.map((i: any) => String(i).toLowerCase()) : [];
     const apiInboxes: string[]        = user.apiInboxes ?? [];
     const sub                         = user.apiSubscription ?? null;
 
@@ -140,11 +141,16 @@ export async function getApiStatusHandler(req: Request, res: Response): Promise<
           max_ws_connections:   planConfig.features.maxWsConnections,
         },
 
-        // ── Inboxes ────────────────────────────────────────────────────────────
-        inboxes: {
+        // ── Inboxes: app (dashboard, app plan) vs API (API plan) ──────────────────
+        app_inboxes: {
+          list:  appInboxes,
+          count: appInboxes.length,
+        },
+        api_inboxes: {
           list:  apiInboxes,
           count: apiInboxes.length,
         },
+        inboxes: { list: apiInboxes, count: apiInboxes.length },
 
         // ── Upsell ─────────────────────────────────────────────────────────────
         upsell: {

@@ -73,15 +73,24 @@ function sanitizeAttachments(msg: any, plan: ApiPlanName): any {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /v1/inboxes — list registered inboxes
+// GET /v1/inboxes — list API-registered inboxes; also return app_inboxes (dashboard)
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/', async (req: Request, res: Response): Promise<any> => {
   try {
-    const user = await db.collection('users').findOne({ wyiUserId: req.apiUser!.userId });
+    const user = await db.collection('users').findOne(
+      { wyiUserId: req.apiUser!.userId },
+      { projection: { apiInboxes: 1, inboxes: 1 } },
+    );
+    const apiInboxesList = user?.apiInboxes ?? [];
+    const appInboxesList = Array.isArray(user?.inboxes) ? user.inboxes.map((i: any) => String(i).toLowerCase()) : [];
     return res.json({
       success: true,
-      data: user?.apiInboxes ?? [],
-      count: user?.apiInboxes?.length ?? 0,
+      data:             apiInboxesList,
+      count:            apiInboxesList.length,
+      api_inboxes:      apiInboxesList,
+      api_inbox_count:  apiInboxesList.length,
+      app_inboxes:      appInboxesList,
+      app_inbox_count:  appInboxesList.length,
     });
   } catch {
     return res.status(500).json({ success: false, error: 'server_error' });
