@@ -11,7 +11,7 @@ export const DOMAINS = [
     'ditplay.info',
     'ditube.info',
     'junkstopper.info',
-    'areureally.info',
+    'areueally.info',
 ];
 
 export async function domainsHandler(req: Request, res: Response): Promise<void> {

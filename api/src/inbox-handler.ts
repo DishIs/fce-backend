@@ -5,13 +5,14 @@ import { client } from './redis';
 import { DOMAINS } from './domains';
 
 export async function addInboxHandler(req: Request, res: Response): Promise<any> {
-  const { wyiUserId, inboxName } = req.body;
+  const { wyiUserId, inboxName, inbox } = req.body;
+  const inboxValue = inboxName ?? inbox;
 
-  if (!wyiUserId || !inboxName) {
+  if (!wyiUserId || !inboxValue) {
     return res.status(400).json({ success: false, message: "User ID and inbox name are required." });
   }
 
-  const normalizedInbox = inboxName.trim().toLowerCase();
+  const normalizedInbox = String(inboxValue).trim().toLowerCase();
 
   // Basic email format check
   if (!/^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$/.test(normalizedInbox)) {
@@ -50,9 +51,10 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
       });
     }
 
-    let inboxes: string[] = Array.isArray(user.inboxes)
-      ? user.inboxes.map(i => i.toLowerCase())
-      : [];
+    const rawInboxes = Array.isArray(user.inboxes) ? user.inboxes : [];
+    let inboxes: string[] = rawInboxes
+      .filter((i): i is string => typeof i === 'string')
+      .map(i => i.toLowerCase());
 
     let successMessage: string;
 
@@ -83,27 +85,30 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
       );
     }
 
-    // --- FIXED: Redis cache handling ---
+    // Redis cache (non-fatal: don't fail the request if Redis is down)
     if (client.isOpen) {
-      const ttl = parseInt(process.env.PLAN_CACHE_TTL || "3600", 10);
-       
-      const userData = {
-        plan: user.plan,
-        userId: user._id,
-        isVerified: false // Default for standard inboxes
-      };
-
-      // FIX: Loop through ALL inboxes in the array and update cache.
-      for (const inbox of inboxes) {
-        const inboxCacheKey = `user_data_cache:${inbox}`;
-        await client.set(inboxCacheKey, JSON.stringify(userData), { EX: ttl });
+      try {
+        const ttl = parseInt(process.env.PLAN_CACHE_TTL || "3600", 10);
+        const userData = {
+          plan: user.plan,
+          userId: user._id?.toString?.() ?? String(user._id),
+          isVerified: false,
+        };
+        for (const addr of inboxes) {
+          const key = `user_data_cache:${addr}`;
+          await client.set(key, JSON.stringify(userData), { EX: ttl });
+        }
+      } catch (redisErr) {
+        console.error("Error updating inbox cache (inbox still saved):", redisErr);
       }
     }
 
     return res.status(200).json({ success: true, message: successMessage });
-
   } catch (error) {
     console.error("Error in addInboxHandler:", error);
-    return res.status(500).json({ success: false, message: "An internal server error occurred." });
+    return res.status(500).json({
+      success: false,
+      message: "An internal server error occurred.",
+    });
   }
 }
