@@ -64,6 +64,8 @@ services:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       JWT_SECRET: ${JWT_SECRET}
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      APP_URL: https://www.freecustom.email
     expose:
       - "3000"
     restart: unless-stopped
@@ -104,11 +106,7 @@ services:
       # Revoke after this many consecutive failing sweeps (guards DNS flaps)
       FAILURE_THRESHOLD: 2
       OUR_MX_SUFFIX: mx.freecustom.email
-      SMTP_HOST: smtp.zoho.in # or SES/Postmark/Resend SMTP host
-      SMTP_PORT: 587
-      SMTP_USER: no-reply@freecustom.email
-      SMTP_PASS: ${SMTP_PASS}
-      MAIL_FROM: '"FreeCustom.Email" <no-reply@freecustom.email>'
+      RESEND_API_KEY: ${RESEND_API_KEY}
       APP_URL: https://www.freecustom.email
       MAIL_DISABLED: "true" # flip to "true" in staging
 
@@ -146,14 +144,14 @@ services:
     environment:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      # Days after cancellation before account is downgraded (0 = immediate)
-      CANCELLATION_GRACE_DAYS: 3
       # How often to sweep (default 6h)
       EXPIRY_INTERVAL_MS: 21600000
       # Must match queue.redis.ini
       FREE_MAILBOX_SIZE: 20
       FREE_MAILBOX_TTL: 86400
       PLAN_CACHE_TTL: 3600
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      APP_URL: https://www.freecustom.email
     depends_on:
       - mongo
       - redis
