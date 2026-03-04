@@ -1,21 +1,11 @@
 {
   "compilerOptions": {
     "target": "es2020",
-
-    /* Modules */
     "module": "commonjs",
-    "moduleResolution": "bundler",        // ← was commented out; "node" doesn't read package.json exports (breaks Resend, Paddle SDK, etc.)
     "rootDir": "./src",
-    "resolveJsonModule": true,            // ← uncomment; needed for serviceAccountKey.json in queue plugin
-
-    /* Emit */
     "outDir": "./dist",
-
-    /* Interop */
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-
-    /* Type Checking */
     "strict": true,
     "skipLibCheck": true
   },
