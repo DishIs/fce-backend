@@ -90,6 +90,7 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /v1/inboxes — register an inbox
+// Validate inbox domain first: must be either a provided domain or user's verified custom domain.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/', async (req: Request, res: Response): Promise<any> => {
   const { inbox } = req.body;
@@ -114,30 +115,33 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
   }
 
   const domain = normalized.split('@')[1];
-  const isSharedDomain = (DOMAINS as string[]).includes(domain);
+  const providedDomains = DOMAINS as string[];
+  const isProvidedDomain = providedDomains.includes(domain);
 
-  // Custom domain guard
-  if (!isSharedDomain && !CUSTOM_DOMAIN_PLANS.includes(apiUser.plan)) {
-    return res.status(403).json({
-      success: false,
-      error: 'plan_required',
-      message: `Custom domain inboxes require Growth plan or above. Your plan: ${apiUser.plan}.`,
-      upgrade_url: 'https://freecustom.email/api/pricing',
-    });
-  }
+  // ── Domain validation: only our provided domains or user's verified custom domains ──
+  if (!isProvidedDomain) {
+    // Custom domain: require Growth plan or above
+    if (!CUSTOM_DOMAIN_PLANS.includes(apiUser.plan)) {
+      return res.status(403).json({
+        success: false,
+        error: 'plan_required',
+        message: `Custom domain inboxes require Growth plan or above. Your plan: ${apiUser.plan}. Use an address at one of our provided domains, e.g. something@ditube.info`,
+        upgrade_url: 'https://freecustom.email/api/pricing',
+      });
+    }
 
-  // If custom domain, verify it belongs to this user
-  if (!isSharedDomain) {
-    const user = await db.collection('users').findOne({
+    // Must be added and verified under this account
+    const userWithDomain = await db.collection('users').findOne({
       wyiUserId: apiUser.userId,
       'customDomains.domain': domain,
       'customDomains.verified': true,
     });
-    if (!user) {
+    if (!userWithDomain) {
       return res.status(403).json({
         success: false,
-        error: 'domain_not_verified',
-        message: `Domain "${domain}" is not verified on your account. Verify it first via the dashboard.`,
+        error: 'domain_not_allowed',
+        message: `Domain "${domain}" is not supported. Use an inbox at one of our provided domains (e.g. @ditube.info) or add and verify "${domain}" in your dashboard.`,
+        provided_domains_example: 'ditube.info',
       });
     }
   }
@@ -160,7 +164,7 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
     const internalPlan = apiPlanToInternalPlan(apiUser.plan);
     await redis.set(
       `user_data_cache:${normalized}`,
-      JSON.stringify({ plan: internalPlan, userId: user._id, isVerified: !isSharedDomain }),
+      JSON.stringify({ plan: internalPlan, userId: user._id, isVerified: !isProvidedDomain }),
       { EX: 3600 },
     );
 
