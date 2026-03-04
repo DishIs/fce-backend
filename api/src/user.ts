@@ -4,20 +4,18 @@ import { IUser, IUserSettings, ISubscription, IPaymentLog } from './mongo';
 import { v4 as uuidv4 } from 'uuid';
 import { Request, Response } from 'express';
 
-// ── Unwrap infinitely-nested { settings: { settings: { ... } } } ──────────────
-// Keeps unwrapping as long as the object has ONLY a single "settings" key,
-// which is the symptom of the double-nesting bug.
+// ── Flatten nested settings (e.g. settings.settings.settings...) ─────────────
+// Recursively merges any "settings" key into the parent so we never persist
+// or return nested structures. Fixes both read (from DB) and write (from client).
 function flattenSettings(raw: any): IUserSettings {
-    let obj = raw;
-    while (
-        obj &&
-        typeof obj === 'object' &&
-        Object.keys(obj).length === 1 &&
-        'settings' in obj
-    ) {
-        obj = obj.settings;
+    if (raw == null || typeof raw !== 'object') return {} as IUserSettings;
+    const result = { ...raw } as Record<string, any>;
+    if ('settings' in result && result.settings != null && typeof result.settings === 'object') {
+        const inner = flattenSettings(result.settings) as Record<string, any>;
+        delete result.settings;
+        Object.assign(result, inner);
     }
-    return (obj ?? {}) as IUserSettings;
+    return result as IUserSettings;
 }
 
 
@@ -98,8 +96,18 @@ export async function getSettingsHandler(req: Request, res: Response) {
 
     try {
         const user = await getUser(wyiUserId);
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
         // Always return a flat, normalized settings object — never the raw nested doc
-        const settings = flattenSettings(user?.settings ?? {});
+        const rawSettings = user.settings ?? {};
+        const settings = flattenSettings(rawSettings);
+        // If stored value was nested, persist the flat version so we don't keep nesting
+        const wasNested = JSON.stringify(rawSettings) !== JSON.stringify(settings);
+        if (wasNested && user._id) {
+            await db.collection('users').updateOne(
+                { _id: user._id },
+                { $set: { settings } }
+            );
+        }
         return res.status(200).json({ success: true, settings });
     } catch (error) {
         return res.status(500).json({ success: false, message: 'Server error' });

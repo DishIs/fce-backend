@@ -12,6 +12,7 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { db } from '../mongo';
 import { client as redis } from '../redis';
+import { getUser } from '../user';
 import { ApiPlanName, API_PLANS } from './api-plans';
 
 // ── Generate ──────────────────────────────────────────────────────────────────
@@ -75,16 +76,21 @@ export async function generateApiKeyHandler(req: Request, res: Response): Promis
 }
 
 // ── List (no secrets) ─────────────────────────────────────────────────────────
+// Resolve user by wyiUserId or linkedProviderIds so the same keys are returned
+// regardless of which provider id the client sends.
 
 export async function listApiKeysHandler(req: Request, res: Response): Promise<any> {
   const { wyiUserId } = req.params;
   if (!wyiUserId) return res.status(400).json({ success: false, message: 'wyiUserId required.' });
 
   try {
+    const user = await getUser(wyiUserId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+
     const keys = await db
       .collection('api_keys')
       .find(
-        { wyiUserId, active: true },
+        { wyiUserId: user.wyiUserId, active: true },
         // Never expose keyHash
         { projection: { keyHash: 0, _id: 1 } },
       )
@@ -105,9 +111,12 @@ export async function revokeApiKeyHandler(req: Request, res: Response): Promise<
   }
 
   try {
+    const user = await getUser(wyiUserId);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found.' });
+
     const { ObjectId } = await import('mongodb');
     const result = await db.collection('api_keys').updateOne(
-      { _id: new ObjectId(keyId), wyiUserId },
+      { _id: new ObjectId(keyId), wyiUserId: user.wyiUserId },
       { $set: { active: false, revokedAt: new Date() } },
     );
     if (result.matchedCount === 0) {
