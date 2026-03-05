@@ -51,17 +51,16 @@ v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
-// ── GET /v1/plans — public plan comparison (no auth) ─────────────────────────
-//    (Applied before the auth middleware below, so auth is not required)
-
 // ── GET /v1/usage — current period usage stats ────────────────────────────────
+// FIX: read from rl:m:{userId}:... (not keyId) to match the rate limiter
 v1Router.get('/usage', async (req: Request, res: Response): Promise<any> => {
   const apiUser = req.apiUser!;
   const { client: redis } = await import('../redis');
 
-  const monthKey = `rl:m:${apiUser.apiKeyId}:${new Date().toISOString().slice(0, 7)}`;
+  // Must match the key used in api-ratelimit.ts — scoped to userId
+  const monthKey = `rl:m:${apiUser.userId}:${new Date().toISOString().slice(0, 7)}`;
   try {
-    const used = parseInt((await redis.get(monthKey)) ?? '0', 10);
+    const used  = parseInt((await redis.get(monthKey)) ?? '0', 10);
     const limit = apiUser.planConfig.rateLimit.requestsPerMonth;
 
     return res.json({
@@ -73,7 +72,7 @@ v1Router.get('/usage', async (req: Request, res: Response): Promise<any> => {
         requests_remaining: Math.max(0, limit - used),
         percent_used:       ((used / limit) * 100).toFixed(1) + '%',
         credits_remaining:  apiUser.credits,
-        resets:             `${new Date().toISOString().slice(0, 7)}-28T00:00:00Z`, // approximate
+        resets:             `${new Date().toISOString().slice(0, 7)}-28T00:00:00Z`,
       },
     });
   } catch {

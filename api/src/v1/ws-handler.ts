@@ -10,6 +10,7 @@
 //  Limits:      Per-plan max connections (5 / 20 / 100)
 //  Events:      Same "new_mail" events as the internal WS, sanitized by plan
 //  Billing:     Each push event counts as 1 request toward monthly quota
+//              scoped to userId (not apiKeyId) — consistent with REST rate limiter
 // ─────────────────────────────────────────────────────────────────────────────
 import WebSocket from 'ws';
 import { IncomingMessage } from 'http';
@@ -25,7 +26,7 @@ interface ApiWsClient {
   userId:   string;
   plan:     ApiPlanName;
   inboxes:  Set<string>;      // subscribed inbox addresses
-  keyId:    string;           // api_key._id for quota tracking
+  keyId:    string;           // api_key._id (kept for reference/logging only)
 }
 
 // userId → set of live connections for that user
@@ -33,10 +34,6 @@ const activeConnections = new Map<string, Set<ApiWsClient>>();
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/**
- * Upgrade an HTTP request to an authenticated API WebSocket.
- * Called by the WS server's `connection` event when the path starts with /v1/ws.
- */
 export async function handleApiWebSocket(
   ws: WebSocket,
   req: IncomingMessage,
@@ -62,14 +59,13 @@ export async function handleApiWebSocket(
   let apiInboxes: string[];
 
   try {
-    // Try cache first
     const cacheKey = `api_key_cache:${keyHash}`;
     const cached   = await redis.get(cacheKey);
 
     if (cached) {
       const cachedUser = JSON.parse(cached);
-      userId  = cachedUser.userId;
-      plan    = cachedUser.plan;
+      userId   = cachedUser.userId;
+      plan     = cachedUser.plan;
       apiKeyId = cachedUser.apiKeyId;
     } else {
       const keyDoc = await db.collection('api_keys').findOne({ keyHash, active: true });
@@ -86,7 +82,7 @@ export async function handleApiWebSocket(
     }
 
     // Fetch apiInboxes separately (not cached — needs to be live)
-    const userDoc   = await db.collection('users').findOne({ wyiUserId: userId });
+    const userDoc = await db.collection('users').findOne({ wyiUserId: userId });
     apiInboxes = userDoc?.apiInboxes ?? [];
 
   } catch (err) {
@@ -98,9 +94,8 @@ export async function handleApiWebSocket(
   // ── 3. Plan gate ────────────────────────────────────────────────────────
   if (!WS_PLANS.includes(plan)) {
     const hint = `WebSocket access requires Startup plan ($19/mo) or above. Your plan: ${plan}.`;
-    ws.close(1008, hint);
-    // Send a final message before closing so clients can display it
     try { ws.send(JSON.stringify({ type: 'error', code: 'plan_required', message: hint, upgrade_url: 'https://freecustom.email/api/pricing' })); } catch (_) {}
+    ws.close(1008, hint);
     return;
   }
 
@@ -188,7 +183,6 @@ export function notifyApiWsClients(mailbox: string, event: any): void {
 
       const cfg = API_PLANS[client.plan];
 
-      // Sanitize OTP based on plan
       const sanitized = { ...event };
       if (!OTP_PLANS.includes(client.plan)) {
         sanitized.otp = event.otp ? '__DETECTED__' : null;
@@ -200,16 +194,12 @@ export function notifyApiWsClients(mailbox: string, event: any): void {
 
       client.ws.send(JSON.stringify(sanitized));
 
-      // Count this push as 1 request toward the monthly quota (fire-and-forget)
-      incrementMonthlyUsage(client.keyId).catch(() => {});
+      // FIX: increment quota by userId (not apiKeyId) — consistent with REST rate limiter
+      incrementMonthlyUsage(client.userId).catch(() => {});
     }
   }
 }
 
-/**
- * Returns a snapshot of current API WebSocket connection counts.
- * Useful for monitoring/stats endpoints.
- */
 export function getApiWsStats(): { total: number; byUser: Record<string, number> } {
   let total = 0;
   const byUser: Record<string, number> = {};
@@ -222,7 +212,8 @@ export function getApiWsStats(): { total: number; byUser: Record<string, number>
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
-async function incrementMonthlyUsage(apiKeyId: string): Promise<void> {
-  const monthKey = `rl:m:${apiKeyId}:${new Date().toISOString().slice(0, 7)}`;
+// FIX: parameter is now `userId`, not `apiKeyId`
+async function incrementMonthlyUsage(userId: string): Promise<void> {
+  const monthKey = `rl:m:${userId}:${new Date().toISOString().slice(0, 7)}`;
   await redis.incr(monthKey);
 }

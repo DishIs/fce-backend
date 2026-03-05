@@ -5,10 +5,10 @@
 //  Mounted at:  GET /v1/inboxes
 //               GET /v1/inboxes/:inbox/messages
 //               GET /v1/inboxes/:inbox/messages/:id
-//               GET /v1/inboxes/:inbox/otp          ← convenience endpoint
+//               GET /v1/inboxes/:inbox/otp
 //               DELETE /v1/inboxes/:inbox/messages/:id
-//               POST /v1/inboxes          (register)
-//               DELETE /v1/inboxes/:inbox (unregister)
+//               POST /v1/inboxes
+//               DELETE /v1/inboxes/:inbox
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, Request, Response } from 'express';
 import { getInbox, getMessage, deleteMessageById } from '../../mailbox';
@@ -16,6 +16,7 @@ import { db } from '../../mongo';
 import { client as redis } from '../../redis';
 import { DOMAINS } from '../../domains';
 import {
+  API_PLANS,           // FIX: top-level import instead of require() inside function
   ApiPlanName,
   apiPlanToInternalPlan,
   OTP_PLANS,
@@ -28,13 +29,27 @@ const router = Router();
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Confirm that the given inbox is registered under this API user */
+/**
+ * Confirm that the given inbox is registered under this API user.
+ * FIX: short-lived Redis cache (30s) to avoid a DB round-trip on every
+ *      message-list / message-get request, which are the hottest paths.
+ */
 async function assertOwned(userId: string, inbox: string): Promise<boolean> {
+  const cacheKey = `inbox_owned:${userId}:${inbox}`;
+  try {
+    const hit = await redis.get(cacheKey);
+    if (hit !== null) return hit === '1';
+  } catch (_) { /* cache miss — fall through */ }
+
   const user = await db.collection('users').findOne({
     wyiUserId: userId,
     apiInboxes: inbox.toLowerCase(),
   });
-  return !!user;
+  const owned = !!user;
+
+  // Cache for 30s — short enough that register/unregister is reflected quickly
+  redis.set(cacheKey, owned ? '1' : '0', { EX: 30 }).catch(() => {});
+  return owned;
 }
 
 /** Strip or tease OTP/verificationLink fields based on the caller's plan */
@@ -54,7 +69,8 @@ function sanitizeMessage(msg: any, plan: ApiPlanName): any {
 
 /** Filter/strip attachments based on the plan's size limit */
 function sanitizeAttachments(msg: any, plan: ApiPlanName): any {
-  const cfg = require('../api-plans').API_PLANS[plan];
+  // FIX: was using require('../api-plans') inside the function on every call
+  const cfg = API_PLANS[plan];
   if (!cfg.features.attachments) {
     const { attachments: _a, ...rest } = msg;
     return {
@@ -73,7 +89,7 @@ function sanitizeAttachments(msg: any, plan: ApiPlanName): any {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /v1/inboxes — list API-registered inboxes; also return app_inboxes (dashboard)
+// GET /v1/inboxes
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/', async (req: Request, res: Response): Promise<any> => {
   try {
@@ -99,7 +115,6 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /v1/inboxes — register an inbox
-// Validate inbox domain first: must be either a provided domain or user's verified custom domain.
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/', async (req: Request, res: Response): Promise<any> => {
   const { inbox } = req.body;
@@ -126,7 +141,6 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
   const domain = normalized.split('@')[1];
   const providedDomains: string[] = [...DOMAINS];
 
-  // Build explicit allow-list: only our provided domains + user's verified custom domains (if plan allows)
   const allowedDomains = new Set<string>(providedDomains);
   if (CUSTOM_DOMAIN_PLANS.includes(apiUser.plan)) {
     const userDoc = await db.collection('users').findOne(
@@ -171,13 +185,16 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
       { $addToSet: { apiInboxes: normalized } },
     );
 
-    // Warm the Haraka plan cache so emails are routed to the right tier
+    // Warm the Haraka plan cache
     const internalPlan = apiPlanToInternalPlan(apiUser.plan);
     await redis.set(
       `user_data_cache:${normalized}`,
       JSON.stringify({ plan: internalPlan, userId: user._id, isVerified: !isProvidedDomain }),
       { EX: 3600 },
     );
+
+    // Invalidate ownership cache so assertOwned picks up the new inbox immediately
+    await redis.del(`inbox_owned:${apiUser.userId}:${normalized}`).catch(() => {});
 
     return res.status(201).json({ success: true, message: 'Inbox registered.', inbox: normalized });
   } catch {
@@ -190,12 +207,17 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
 // ─────────────────────────────────────────────────────────────────────────────
 router.delete('/:inbox', async (req: Request, res: Response): Promise<any> => {
   const inbox = req.params.inbox.toLowerCase();
+  const userId = req.apiUser!.userId;
   try {
     await db.collection('users').updateOne(
-      { wyiUserId: req.apiUser!.userId },
+      { wyiUserId: userId },
       { $pull: { apiInboxes: inbox } as any },
     );
-    await redis.del(`user_data_cache:${inbox}`);
+    // Invalidate both the Haraka cache and the ownership cache
+    await Promise.all([
+      redis.del(`user_data_cache:${inbox}`),
+      redis.del(`inbox_owned:${userId}:${inbox}`),
+    ]);
     return res.json({ success: true, message: 'Inbox unregistered.' });
   } catch {
     return res.status(500).json({ success: false, error: 'server_error' });
@@ -220,9 +242,7 @@ router.get('/:inbox/messages', async (req: Request, res: Response): Promise<any>
   try {
     const internalPlan = apiPlanToInternalPlan(apiUser.plan);
     const raw = (await getInbox(inbox, internalPlan)) as any[];
-
     const data = raw.map(msg => sanitizeMessage(msg, apiUser.plan));
-
     return res.json({ success: true, data, count: data.length });
   } catch {
     return res.status(500).json({ success: false, error: 'server_error' });
@@ -288,27 +308,22 @@ router.get('/:inbox/otp', async (req: Request, res: Response): Promise<any> => {
     const internalPlan = apiPlanToInternalPlan(apiUser.plan);
     const messages = (await getInbox(inbox, internalPlan)) as any[];
 
-    // Newest message with a real OTP (not a tease string)
     const withOtp = messages
       .filter(m => m.otp && !['__DETECTED__', '__UPGRADE_REQUIRED__'].includes(m.otp))
       .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
     if (!withOtp.length) {
-      return res.json({
-        success: true,
-        otp: null,
-        message: 'No OTP found in recent messages.',
-      });
+      return res.json({ success: true, otp: null, message: 'No OTP found in recent messages.' });
     }
 
     const latest = withOtp[0];
     return res.json({
       success: true,
-      otp:              latest.otp,
-      email_id:         latest.id,
-      from:             latest.from,
-      subject:          latest.subject,
-      timestamp:        new Date(latest.date).getTime(),
+      otp:               latest.otp,
+      email_id:          latest.id,
+      from:              latest.from,
+      subject:           latest.subject,
+      timestamp:         new Date(latest.date).getTime(),
       verification_link: latest.verificationLink ?? null,
     });
   } catch {
@@ -331,7 +346,6 @@ router.delete('/:inbox/messages/:id', async (req: Request, res: Response): Promi
   try {
     const internalPlan = apiPlanToInternalPlan(apiUser.plan);
     const deleted = await deleteMessageById(normalizedInbox, id, internalPlan);
-
     return res.json({
       success: deleted,
       message: deleted ? 'Message deleted.' : 'Message not found.',
