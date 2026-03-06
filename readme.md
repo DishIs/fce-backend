@@ -1,264 +1,121 @@
-[Live Site](https://freecustom.email)
-[Buy API](https://rapidapi.com/dishis-technologies-maildrop/api/temp-mail-maildrop1)
-# Temp Mail API Documentation
-This document provides detailed information on your mail server's API endpoints, expected responses, and encryption methodologies. The API is designed for efficient mailbox management, including retrieving messages, checking server health, and handling encrypted mailbox identifiers.
+<p align="center">
+  <a href="https://www.freecustom.email">
+    <img src="https://www.freecustom.email/logo.webp" alt="FreeCustom.Email Logo" width="128" height="128">
+  </a>
+</p>
 
-**Send Mail on: any@ditapi.info**
+<h1 align="center">FreeCustom.Email Backend (Maildrop)</h1>
 
-## 1. GET /mailbox/{email}
-**Purpose:**
+<p align="center">
+  <a href="https://github.com/DishIs/fce-backend/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/DishIs/fce-backend" alt="License">
+  </a>
+  <a href="https://github.com/DishIs/fce-backend/issues">
+    <img src="https://img.shields.io/github/issues/DishIs/fce-backend" alt="Issues">
+  </a>
+  <a href="https://github.com/DishIs/fce-backend/pulls">
+    <img src="https://img.shields.io/github/issues-pr/DishIs/fce-backend" alt="Pull Requests">
+  </a>
+</p>
 
-Retrieve all messages in the mailbox of a specific user.
+## About
 
-**Request:**
-- URL: `/mailbox/{email}`
-- Method: GET
-- Path Parameter:
-- `{email}`: The mailbox address with domain.
+This repository contains the backend source code for [FreeCustom.Email](https://www.freecustom.email), a powerful and privacy-focused temporary email service. The backend, codenamed Maildrop, is a multi-service application built with Node.js, TypeScript, and Docker. It's responsible for handling everything from receiving and storing emails to managing user accounts and subscriptions.
 
-**Headers:**
-- *Content-Type: application/json*
-Optional Authentication Token (if using a secured server).
-### Successful Response (Mailbox with data):
-```json
-{
-  "success": true,
-  "message": "Mailbox retrieved successfully.",
-  "data": [
-    {
-      "id": "wNp8N0KoV",
-      "from": "\"SendTestEmail\" <noreply@sendtestemail.com>",
-      "to": "maildrop@ditapi.info",
-      "subject": "SendTestEmail.com - Testing Email ID: 00eb36052b8d426c86fa57a88f0b6753",
-      "date": "2026-02-19T03:41:32.438Z",
-      "hasAttachment": false,
-      "wasAttachmentStripped": false,
-      "otp": null,
-      "verificationLink": null
-    },
-    {
-      "id": "s9wDKspt-",
-      "from": "\"SendTestEmail\" <noreply@sendtestemail.com>",
-      "to": "maildrop@ditapi.info",
-      "subject": "SendTestEmail.com - Testing Email ID: 480b2992fe9f73b0e44f2b9cf7a8d681",
-      "date": "2026-02-19T03:41:00.159Z",
-      "hasAttachment": false,
-      "wasAttachmentStripped": false,
-      "otp": null,
-      "verificationLink": null
-    }
-  ],
-  "encryptedMailbox": "D-1tvd0i7g79sx52l1jui"
-}
-```
-### Successful Response (Empty Mailbox):
-```json
-{
-  "success": true,
-  "message": "Mailbox retrieved successfully.",
-  "data": [],
-  "encryptedMailbox": "D-n4ycz"
-}
-```
-**Explanation:**
-- `data`: Contains an array of messages if present. Each message object includes the following fields:
-- `id`: A unique identifier for the message.
-- `from`: The sender of the message.
-- `to`: The recipient (the mailbox user).
-- `subject`: The subject line of the email.
-- `date`: The timestamp when the email was received (in ISO 8601 format).
-- `encryptedMailbox`: A unique, encrypted identifier for the mailbox, used for security purposes.
+This project is the backend component of the FreeCustom.Email service. The frontend is also open-source and can be found at [DishIs/temp-mail](https://github.com/DishIs/temp-mail).
 
-## 2. GET /mailbox/{email}/message/{id}
-**Purpose:**
+## Features
 
-Retrieve a specific email message from the user's mailbox by its unique identifier.
+*   **Custom SMTP Server:** A highly customized Haraka SMTP server for high-performance email processing.
+*   **Microservices Architecture:** A collection of services for different tasks, including a REST API, background workers, and more.
+*   **Real-time Updates:** WebSocket integration for real-time updates to the frontend.
+*   **Secure and Scalable:** Designed with security and scalability in mind, using technologies like MongoDB, Redis, and Docker.
 
-**Request:**
-- URL: /mailbox/{email}/message/{id}
-- Method: GET
+## Getting Started
 
-**Path Parameters:**
+### Prerequisites
 
-- {email}: The address of the mailbox.
-- {id}: The unique identifier of the email message.
+*   Docker
+*   Docker Compose
+*   Your own domain names for the API and SMTP server.
 
-**Headers:**
+### Installation
 
-- *Content-Type: application/json*
-Optional Authentication Token (if using a secured server).
-### Successful Response (Message Found):
-```json
-{
-  "success": true,
-  "message": "Message retrieved successfully.",
-  "data": {
-    "id": "wNp8N0KoV",
-    "from": "\"SendTestEmail\" <noreply@sendtestemail.com>",
-    "to": "maildrop@ditapi.info",
-    "subject": "SendTestEmail.com - Testing Email ID: 00eb36052b8d426c86fa57a88f0b6753",
-    "date": "2026-02-19T03:41:32.438Z",
-    "hasAttachment": false,
-    "wasAttachmentStripped": false,
-    "html": "<html>\nCongratulations!<br><br>\nIf you are reading this your email address is working.<br><br>\nThis is not spam or a solicitation. This email was sent to your email address because you, or someone else, requested a test email to be sent to this address. We work hard to ensure a balance between testing, transparency, and privacy. If you did not request this email test, it's likely that someone accidentally mistyped their email address as yours. You can request your email address be blocked here: <a href=\"https://sendtestemail.com/block\">https://sendtestemail.com/block</a><br><br>\nThe IP address of the requester of this test email is: 103.175.29.180\n</html>",
-    "text": "If you are reading this your email address is working.\n\n\nThis is not spam or a solicitation. This email was sent to your email address because you, or someone else, requested a test email to be sent to this address. We work hard to ensure a balance between testing, transparency, and privacy. If you did not request this email test, it's likely that someone accidentally mistyped their email address as yours. You can request your email address be blocked here: https://sendtestemail.com/block\n\n\nThe IP address of the requester of this test email is: 103.175.29.180",
-    "attachments": []
-  }
-}
-```
-### Error Response (Message Not Found):
-```json
-{
-  "success": false,
-  "message": "Message not found.",
-  "details": {
-    "mailbox": "D-3670x23pe7gkt",
-    "id": "7122AUPO"
-  }
-}
-```
-**Explanation:**
-- `body`: The plain text version of the email.
-- `html`: The HTML version of the email content.
-- `from / to / subject / date`: Standard metadata for the email message.
+1.  **Clone the repository:**
+    ```sh
+    git clone https://github.com/DishIs/fce-backend.git
+    cd fce-backend
+    ```
+2.  **Update `docker-compose.yml`:**
+    Before you can start the application, you need to replace all instances of `api2.freecustom.email` and `mx.freecustom.email` with your own domain names.
 
-## 3. DELETE /mailbox/{name}/message/{id}
-**Purpose:**
+3.  **Create a `.env` file:**
+    ```sh
+    cp .env.example .env
+    ```
+4.  **Fill in the environment variables** in the `.env` file.
 
-Deletes a specific email message from the user's mailbox.
+5.  **Initial SSL Certificate Setup (Important):**
+    The `certbot-renew` service will not start without an initial SSL certificate. You need to run the `certbot` service once to generate the initial certificate.
+    ```sh
+    docker-compose up -d certbot
+    ```
+    Once the `certbot` service has finished running, you can stop it. The `certbot-renew` service will then be able to start and will handle renewing the certificate automatically.
 
-**Request:**
-- URL: `/mailbox/{email}/message/{id}`
-- Method: DELETE
+6.  **Start the application:**
+    ```sh
+    docker-compose up -d
+    ```
 
-**Path Parameters:**
-- {name}: The address of the mailbox.
-- {id}: The unique identifier of the email message.
+## SMTP Server: `smtp` vs. `smtp-fast`
 
-**Headers:**
-- *Content-Type: application/json*
+This repository contains two different SMTP server configurations: `smtp` and `smtp-fast`.
 
-Optional Authentication Token (if using a secured server).
-### Successful Response (Message Deleted):
-```json
-{
-  "success": true,
-  "message": "Message deleted successfully."
-}
-```
-**Explanation:**
+*   **`smtp`**: This is an older, slower configuration that performs more email checks and has better spam detection. It is not actively maintained.
+*   **`smtp-fast`**: This is the configuration that FreeCustom.Email actually uses. It is a high-performance configuration that is designed for speed. It is actively maintained.
 
-This API deletes the specific email message from the mailbox. It doesn't return the message data after deletion, but you can verify that the message no longer exists by requesting the `/mailbox/{name}` endpoint.
+The `docker-compose.yml` file is configured to use the `smtp-fast` service by default.
 
-## 4. GET /health
-**Purpose:**
-Fetches server health statistics, providing insight into the number of queued and denied requests.
+## Haraka Setup (`smtp-fast`)
 
-**Request:**
-- URL: /health
-- Method: GET
+The `smtp-fast` service uses Haraka, a highly extensible and customizable SMTP server written in Node.js. Our Haraka setup is heavily customized with a series of plugins to create a high-performance email processing pipeline.
 
-**Headers:**
-- *Content-Type: application/json*
+### Configuration Files
 
-### Successful Response:
-```json
-{
-  "success": true,
-  "message": "Stats retrieved successfully.",
-  "data": {
-    "queued": 1545377,
-    "denied": 121499
-  }
-}
-```
-**Explanation:**
-- queued: The number of messages that are queued for processing.
-- denied: The number of denied requests, such as emails blocked due to spam or other policies.
+The configuration for the Haraka server is located in the `smtp-fast/src/config` directory. Here are some of the most important files:
 
-## 5. Mailbox Encryption Process
-### Encryption Methodology:
-To protect mailbox identifiers, the system uses a custom encryption process. Below is a detailed breakdown of how mailbox names are encrypted:
+*   **`plugins`**: This file defines the order in which the Haraka plugins are executed.
+*   **`smtp.ini`**: This file contains the main configuration for the SMTP server.
+*   **`redis.ini`**: This file configures the connection to the Redis server.
+*   **`queue.redis.ini`**: This file configures the custom Redis queue plugin.
 
-**Remove Non-Alphanumeric Characters:**
+### Custom Plugins
 
-All special characters, spaces, and punctuation are stripped from the mailbox name.
+We use several custom plugins to add functionality to the Haraka server. These plugins are located in the `smtp-fast/src/plugins` directory.
 
-**Convert the Cleaned String to a Long Integer:**
+*   **`rcpt_to_mongo.js`**: Checks if the recipient is a valid user by looking them up in the MongoDB database.
+*   **`data.blocklist.js`**: Blocks emails from muted senders.
+*   **`queue.redis.js`**: Queues emails in Redis for later processing by the API service.
+*   **`stats.redis.js`**: Records statistics to Redis.
 
-The alphanumeric characters are converted into a long integer, preserving the unique nature of the name.
+## Public API (v1)
 
-**Reverse Digits and Prepend '1':**
+This backend also hosts our public API v1, which can be accessed at [https://www.freecustom.email/api](https://www.freecustom.email/api). No manual setup is required to use this public API. You can also explore and test the API endpoints live at the `/api/playground` (e.g., `https://www.freecustom.email/api/playground`).
 
-The digits of the long integer are reversed to obfuscate the original sequence.
-A '1' is prepended to this reversed string to ensure the final value meets a minimum length requirement.
+## Contributing
 
-**Add a Private Modifier:**
+We welcome contributions from the community! Please read our [Contributing Guide](CONTRIBUTING.md) to learn how you can get involved.
 
-A special private modifier (e.g., appending an identifier to signify the private nature of the mailbox) is added for additional security. 
-The private modifier is `20190422`
+## Code of Conduct
 
-**Base36 Encoding:**
+Please note that this project is released with a [Contributor Code of Conduct](CODE_OF_CONDUCT.md). By participating in this project you agree to abide by its terms.
 
-The modified integer is then encoded into base36 (a numeral system that uses 0–9 and A–Z), reducing its length and making it more compact.
+## License
 
-**Prefix the Encrypted Value:**
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
 
-The final encrypted value is prepended with a designated prefix (e.g., D- for distinguishing encrypted mailbox IDs).
+## Contact
 
-### Example:
-Original Mailbox: `dishant@mail.com`
+DishIs Technologies - [@DishIs](https://github.com/DishIs)
 
-**Encryption Steps:**
-
-- Strip non-alphanumeric: `dishantmailcom`
-- Convert to long integer: `12345678901234`
-- Reverse and prepend: `143210987654321`
-- Add private modifier: `143210987654321P`
-- Convert to base36: `1qdvjaze`
-- Prepend prefix: `D-1qdvjaze`
-- Final Encrypted Mailbox: `D-1qdvjaze`
-
-**Code for decoder:**
-```js
-import bigInt from 'big-integer';
-
-const ALTINBOX_MOD = bigInt("20190422");
-
-export function decryptMailbox(encryptedMailbox: string): string {
-  // Remove the prefix
-  const withoutPrefix = encryptedMailbox.slice(2); // Remove 'D-'
-  
-  // Convert from base36 to a number
-  const decryptedNum = bigInt(withoutPrefix, 36);
-  
-  // Subtract the private modifier
-  const adjustedNum = decryptedNum.subtract(ALTINBOX_MOD);
-  
-  // Convert back to string, remove the leading '1', and reverse it
-  const reversedString = adjustedNum.toString().slice(1).split("").reverse().join("");
-  
-  // Convert back to original base 36 (only alphanumeric characters)
-  const originalMailbox = reversedString.replace(/[^0-9a-z]/gi, '');
-
-  return originalMailbox;
-}
-
-// Example usage:
-const encrypted = encryptMailbox("dishantmailcom");
-const decrypted = decryptMailbox(encrypted);
-console.log(`Encrypted: ${encrypted}`);
-console.log(`Decrypted: ${decrypted}`);
-```
-
-This process ensures that even if mailbox names are exposed, they are obfuscated and cannot be easily reverse-engineered.
-
-## Security Considerations
-### Authentication & Authorization:
-All sensitive endpoints require an authentication token for security, especially when accessing or modifying mailbox data.
-
-**Encryption:**
-Mailbox identifiers are encrypted to prevent unauthorized access and tampering. All encryption algorithms follow industry best practices.
-
-**Rate Limiting:**
-The API applies rate limiting to prevent abuse, especially on endpoints such as mailbox deletion and message retrieval.
+Project Link: [https://github.com/DishIs/fce-backend](https://github.com/DishIs/fce-backend)
