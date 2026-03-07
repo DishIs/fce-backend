@@ -2,7 +2,7 @@
 import { Request, Response } from 'express';
 import { db } from './mongo';
 import { client } from './redis';
-import { DOMAINS } from './domains';
+import { DOMAINS, FREE_DOMAINS, PRO_DOMAINS, getDomainEntry } from './domain-registry';
 
 export async function addInboxHandler(req: Request, res: Response): Promise<any> {
   const { wyiUserId, inboxName, inbox } = req.body;
@@ -14,7 +14,6 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
 
   const normalizedInbox = String(inboxValue).trim().toLowerCase();
 
-  // Basic email format check
   if (!/^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$/.test(normalizedInbox)) {
     return res.status(400).json({
       success: false,
@@ -25,10 +24,9 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
   const domain = normalizedInbox.split('@')[1];
 
   try {
-    // UPDATED: Check for user via wyiUserId OR linkedProviderIds
     const user = await db.collection('users').findOne({
       $or: [
-        { wyiUserId: wyiUserId },
+        { wyiUserId },
         { linkedProviderIds: wyiUserId },
       ],
     });
@@ -37,20 +35,47 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
       return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // Allowed domains: our provided domains + user's verified custom domains (pro only)
-    const allowedDomains = new Set<string>(DOMAINS.map((d: string) => d.toLowerCase()));
-    if (user.plan === 'pro' && Array.isArray(user.customDomains)) {
-      user.customDomains
-        .filter((d: { verified?: boolean }) => d.verified === true)
-        .forEach((d: { domain: string }) => allowedDomains.add(d.domain.toLowerCase()));
-    }
-    if (!allowedDomains.has(domain)) {
-      return res.status(400).json({
-        success: false,
-        message: `Domain "${domain}" is not supported. Use an address at one of our provided domains (e.g. @ditube.info) or add and verify your custom domain in Settings.`,
-      });
+    const isPro = user.plan === 'pro';
+
+    // ── Domain tier check ──────────────────────────────────────────────────
+    // Check if the domain is a registered platform domain and what tier it is.
+    const registryEntry = getDomainEntry(domain);
+
+    if (registryEntry) {
+      // It's one of our platform domains — enforce tier gating.
+      if (registryEntry.tier === 'pro' && !isPro) {
+        return res.status(403).json({
+          success: false,
+          message: `@${domain} is a Pro-tier domain. Upgrade to Pro to use it, or choose a free domain (e.g. @ditube.info).`,
+          upgrade_url: 'https://freecustom.email/pricing',
+        });
+      }
+    } else {
+      // Not a platform domain — must be a user custom domain.
+      // Only pro users can use custom domains, and it must be verified.
+      if (!isPro) {
+        return res.status(403).json({
+          success: false,
+          message: `Domain "${domain}" is not supported. Use an address at one of our provided domains (e.g. @ditube.info). Custom domains require a Pro plan.`,
+          upgrade_url: 'https://freecustom.email/pricing',
+        });
+      }
+
+      const isVerifiedCustom = Array.isArray(user.customDomains) &&
+        user.customDomains.some(
+          (d: { domain: string; verified?: boolean }) =>
+            d.domain.toLowerCase() === domain && d.verified === true,
+        );
+
+      if (!isVerifiedCustom) {
+        return res.status(400).json({
+          success: false,
+          message: `Domain "${domain}" is not verified. Add and verify it in Settings before using it.`,
+        });
+      }
     }
 
+    // ── Inbox list update ──────────────────────────────────────────────────
     const rawInboxes = Array.isArray(user.inboxes) ? user.inboxes : [];
     let inboxes: string[] = rawInboxes
       .filter((i): i is string => typeof i === 'string')
@@ -58,34 +83,27 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
 
     let successMessage: string;
 
-    // --- Logic to update DB Inboxes List ---
-    if (user.plan === 'pro') {
-      // Pro users keep all inboxes, just move current to top
+    if (isPro) {
       inboxes = inboxes.filter(i => i !== normalizedInbox);
       inboxes.unshift(normalizedInbox);
       successMessage = "Inbox added successfully.";
     } else {
-      // Free users only get 1 active inbox
       if (inboxes[0] === normalizedInbox) {
-        return res.status(200).json({
-          success: true,
-          message: "This is already your active inbox."
-        });
+        return res.status(200).json({ success: true, message: "This is already your active inbox." });
       }
       inboxes = [normalizedInbox];
       successMessage = "Inbox has been updated.";
     }
 
-    // Update DB if inbox list changed
     const inboxesChanged = JSON.stringify(inboxes) !== JSON.stringify(user.inboxes);
     if (inboxesChanged) {
       await db.collection('users').updateOne(
-        { _id: user._id }, // Use _id obtained from findOne for safety
-        { $set: { inboxes } }
+        { _id: user._id },
+        { $set: { inboxes } },
       );
     }
 
-    // Redis cache (non-fatal: don't fail the request if Redis is down)
+    // ── Redis cache ────────────────────────────────────────────────────────
     if (client.isOpen) {
       try {
         const ttl = parseInt(process.env.PLAN_CACHE_TTL || "3600", 10);
@@ -95,20 +113,16 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
           isVerified: false,
         };
         for (const addr of inboxes) {
-          const key = `user_data_cache:${addr}`;
-          await client.set(key, JSON.stringify(userData), { EX: ttl });
+          await client.set(`user_data_cache:${addr}`, JSON.stringify(userData), { EX: ttl });
         }
       } catch (redisErr) {
-        console.error("Error updating inbox cache (inbox still saved):", redisErr);
+        console.error("Redis cache update failed (inbox still saved):", redisErr);
       }
     }
 
     return res.status(200).json({ success: true, message: successMessage });
   } catch (error) {
     console.error("Error in addInboxHandler:", error);
-    return res.status(500).json({
-      success: false,
-      message: "An internal server error occurred.",
-    });
+    return res.status(500).json({ success: false, message: "An internal server error occurred." });
   }
 }
