@@ -1,4 +1,4 @@
-// v1/router.ts
+// v1/router.ts  (updated — /v1/domains added)
 // ─────────────────────────────────────────────────────────────────────────────
 //  Public developer API router — mounted at /v1
 //  Domain: api.freecustom.email
@@ -8,6 +8,7 @@ import { Router, Request, Response } from 'express';
 import { apiKeyAuth } from './api-auth';
 import { apiRateLimit } from './api-ratelimit';
 import inboxRouter from './routes/inbox';
+import domainsRouter from './routes/domains';          // ← NEW
 import { db } from '../mongo';
 import { API_PLANS, CREDIT_PACKAGES } from './api-plans';
 
@@ -19,6 +20,7 @@ v1Router.use(apiRateLimit);
 
 // ── Sub-routers ───────────────────────────────────────────────────────────────
 v1Router.use('/inboxes', inboxRouter);
+v1Router.use('/domains', domainsRouter);               // ← NEW
 
 // ── GET /v1/me — account info ─────────────────────────────────────────────────
 v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {
@@ -52,12 +54,10 @@ v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {
 });
 
 // ── GET /v1/usage — current period usage stats ────────────────────────────────
-// FIX: read from rl:m:{userId}:... (not keyId) to match the rate limiter
 v1Router.get('/usage', async (req: Request, res: Response): Promise<any> => {
   const apiUser = req.apiUser!;
   const { client: redis } = await import('../redis');
 
-  // Must match the key used in api-ratelimit.ts — scoped to userId
   const monthKey = `rl:m:${apiUser.userId}:${new Date().toISOString().slice(0, 7)}`;
   try {
     const used  = parseInt((await redis.get(monthKey)) ?? '0', 10);
@@ -115,8 +115,6 @@ export function createPublicV1Router(): Router {
     });
   });
 
-  // Mount authenticated sub-router
   pub.use('/', v1Router);
-
   return pub;
 }
