@@ -57,7 +57,11 @@ export const DOMAIN_REGISTRY: DomainEntry[] = [
   // ── Pro tier (add new stealthy domains here) ─────────────────────────────
   // Example — replace with real domains when you register them:
   // { domain: 'getnotify.io',   tier: 'pro',  expiresAt: '2027-03-01', tags: ['new'],    active: true  },
-  // { domain: 'inboxrelay.net', tier: 'pro',  expiresAt: '2027-03-01', tags: ['new'],    active: true  },
+  { domain: 'addmy.space', tier: 'free',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
+  { domain: 'attachmy.site', tier: 'free',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
+  { domain: 'ditmail.pro', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new', 'featured'],    active: true  },
+  { domain: 'isapi.live', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
+  { domain: 'mock-api.pro', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new', 'featured'],    active: true  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
