@@ -63,7 +63,7 @@ export async function getApiStatusHandler(req: Request, res: Response): Promise<
     const nextPlanConfig = nextPlan ? API_PLANS[nextPlan] : null;
 
     const upsellNudges: string[] = [];
-    if (!planConfig.features.otpExtraction) upsellNudges.push('Upgrade to Developer ($7/mo) to unlock OTP extraction.');
+    if (!planConfig.features.otpExtraction) upsellNudges.push('Upgrade to Developer ($7/mo) to unlock more requests.');
     if (!planConfig.features.websocket)     upsellNudges.push('Upgrade to Startup ($19/mo) to unlock real-time WebSocket events.');
     if (!planConfig.features.customDomains) upsellNudges.push('Upgrade to Growth ($49/mo) to use custom domain inboxes.');
     if (monthlyUsed / monthlyLimit >= 0.8)  upsellNudges.push(`You've used ${percentUsed}% of your monthly quota. Consider upgrading or buying credits.`);

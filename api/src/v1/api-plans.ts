@@ -45,7 +45,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
     price: 7,
     rateLimit: { requestsPerSecond: 10, requestsPerMonth: 100_000 },
     features: {
-      otpExtraction: true,
+      otpExtraction: false,
       attachments: false,
       maxAttachmentSizeMb: 0,
       customDomains: false,
@@ -59,7 +59,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
     price: 19,
     rateLimit: { requestsPerSecond: 25, requestsPerMonth: 500_000 },
     features: {
-      otpExtraction: true,
+      otpExtraction: false,
       attachments: true,
       maxAttachmentSizeMb: 5,
       customDomains: false,
@@ -117,7 +117,7 @@ export const CREDIT_PACKAGES: CreditPackage[] = [
 export const WS_PLANS: ApiPlanName[] = ['startup', 'growth', 'enterprise'];
 
 /** Plans that expose OTP extraction */
-export const OTP_PLANS: ApiPlanName[] = ['developer', 'startup', 'growth', 'enterprise'];
+export const OTP_PLANS: ApiPlanName[] = ['growth', 'enterprise'];
 
 /** Plans that allow custom domain inboxes */
 export const CUSTOM_DOMAIN_PLANS: ApiPlanName[] = ['growth', 'enterprise'];
