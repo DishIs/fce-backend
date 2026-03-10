@@ -55,16 +55,27 @@ async function updatePaddleSubscription(
 
   const body: Record<string, unknown> = {
     items: [{ price_id: newPriceId, quantity: 1 }],
-    // Upgrades: bill prorated delta now.
-    // Downgrades: schedule for next period, no immediate charge/credit.
-    proration_billing_mode: upgrade ? 'prorated_immediately' : 'do_not_bill',
+    // Upgrades: add the prorated amount to the *next* invoice instead of
+    // charging immediately. This avoids declined-card errors at change time
+    // since the charge only happens on the customer's normal billing date.
+    // Features are still unlocked right away via the optimistic DB write below.
+    //
+    // Downgrades: schedule item swap for next period, no charge/credit issued.
+    proration_billing_mode: upgrade ? 'prorated_next_billing_period' : 'do_not_bill',
   };
 
-  // On downgrade, prevent the change if the next payment fails
-  // (so the user isn't silently bumped down without paying for the remaining period)
   if (!upgrade) {
+    // Prevent silent downgrade if next payment fails
     body.on_payment_failure = 'prevent_change';
   }
+
+  // Known Paddle error codes we want to surface with a friendly message
+  const PADDLE_ERROR_MESSAGES: Record<string, string> = {
+    subscription_payment_declined:   'Your payment method was declined. Please update your card in the billing portal and try again.',
+    subscription_not_active:         'Your subscription is not active. Please contact support.',
+    subscription_update_when_paused: 'Your subscription is paused. Please resume it before changing plans.',
+    invalid_price_for_subscription:  'This plan is not available for your current subscription. Please contact support.',
+  };
 
   try {
     const res = await fetch(`${baseUrl}/subscriptions/${subscriptionId}`, {
@@ -78,8 +89,13 @@ async function updatePaddleSubscription(
 
     const json = await res.json();
     if (!res.ok) {
+      const code    = json?.error?.code ?? '';
+      const message = PADDLE_ERROR_MESSAGES[code]
+        ?? json?.error?.detail
+        ?? json?.error?.type
+        ?? 'Paddle API error';
       console.error('[PaddleChange] Paddle error:', JSON.stringify(json));
-      return { ok: false, error: json?.error?.detail ?? json?.error?.type ?? 'Paddle API error' };
+      return { ok: false, error: message, code };
     }
     return { ok: true, data: json?.data };
   } catch (err: any) {
