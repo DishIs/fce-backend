@@ -48,7 +48,7 @@ async function updatePaddleSubscription(
   subscriptionId: string,
   newPriceId:     string,
   upgrade:        boolean,
-): Promise<{ ok: boolean; error?: string; data?: any }> {
+): Promise<{ ok: boolean; error?: string; code?: string; data?: any }> {
   const baseUrl = process.env.PADDLE_ENV === 'sandbox'
     ? 'https://sandbox-api.paddle.com'
     : 'https://api.paddle.com';
