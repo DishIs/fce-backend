@@ -1,11 +1,7 @@
 // api-custom-domains-handler.ts
 // ─────────────────────────────────────────────────────────────────────────────
-//  Internal Express routes that mirror the v1/routes/custom-domains logic but
-//  accept `?wyiUserId=` instead of an API key — these are only reachable with
-//  the INTERNAL_API_KEY header (enforced in server.ts internalApiAuth).
-//
-//  The Next.js frontend calls these via the /api/user/api-custom-domains proxy
-//  routes so the browser never touches the v1 API key system directly.
+//  Internal Express routes for custom domain management.
+//  Accepts ?wyiUserId= + x-internal-api-key (enforced in server.ts).
 //
 //  Mounted in server.ts at:
 //    GET    /user/api-custom-domains
@@ -17,7 +13,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Request, Response } from 'express';
 import crypto from 'crypto';
-import { db } from './mongo';
+import { promises as dns, MxRecord } from 'dns';
+import { db, IUser } from './mongo';
 import { client as redis } from './redis';
 import { CUSTOM_DOMAIN_PLANS, ApiPlanName } from './v1/api-plans';
 
@@ -30,7 +27,20 @@ const TXT_PREFIX = process.env.CUSTOM_DOMAIN_TXT_PREFIX ?? 'freecustomemail-veri
 const MAX_DOMAINS = 10;
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Shared helpers (same as v1/routes/custom-domains.ts)
+//  getUser — canonical lookup (primary or linked provider ID)
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function getUser(userId: string): Promise<IUser | null> {
+  return await db.collection<IUser>('users').findOne({
+    $or: [
+      { wyiUserId: userId },
+      { linkedProviderIds: userId },
+    ],
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Domain validation
 // ─────────────────────────────────────────────────────────────────────────────
 
 function isValidDomain(v: string): boolean {
@@ -41,6 +51,10 @@ function isValidDomain(v: string): boolean {
   return labels.every(l => /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(l));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Verification token — same deterministic formula as v1/routes/custom-domains
+// ─────────────────────────────────────────────────────────────────────────────
+
 function makeToken(domain: string, userId: string): string {
   return crypto
     .createHmac('sha256', process.env.JWT_SECRET ?? 'secret')
@@ -49,99 +63,190 @@ function makeToken(domain: string, userId: string): string {
     .slice(0, 32);
 }
 
-async function resolveMx(domain: string): Promise<string[]> {
-  const res = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=MX`, { signal: AbortSignal.timeout(5_000) });
-  if (!res.ok) return [];
-  const json = await res.json() as { Answer?: Array<{ data: string }> };
-  return (json.Answer ?? []).map(a => a.data.split(/\s+/).pop()!.replace(/\.$/, '').toLowerCase()).filter(Boolean);
-}
+// ─────────────────────────────────────────────────────────────────────────────
+//  DNS verification — mirrors domain-handler.ts (Node dns module, not DoH)
+// ─────────────────────────────────────────────────────────────────────────────
 
-async function resolveTxt(domain: string): Promise<string[]> {
-  const res = await fetch(`https://dns.google/resolve?name=${encodeURIComponent(domain)}&type=TXT`, { signal: AbortSignal.timeout(5_000) });
-  if (!res.ok) return [];
-  const json = await res.json() as { Answer?: Array<{ data: string }> };
-  return (json.Answer ?? []).map(a => a.data.replace(/^"|"$/g, '')).filter(Boolean);
-}
+async function checkDns(
+  domain: string,
+  expectedTxtToken: string,
+  expectedMxHost: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const expectedTxtValue = `${TXT_PREFIX}=${expectedTxtToken}`;
 
-async function checkDns(domain: string, token: string): Promise<{ ok: boolean; reason?: string }> {
-  const [mxRecs, txtRecs] = await Promise.all([resolveMx(domain), resolveTxt(domain)]);
-  const mxOk  = mxRecs.some(r => r === MX_RECORD.toLowerCase().replace(/\.$/, ''));
-  const txtOk = txtRecs.some(r => r === `${TXT_PREFIX}=${token}`);
-  if (!mxOk && !txtOk) return { ok: false, reason: `MX "${MX_RECORD}" and TXT "${TXT_PREFIX}=${token}" not found.` };
-  if (!mxOk)           return { ok: false, reason: `MX record pointing to "${MX_RECORD}" not found.` };
-  if (!txtOk)          return { ok: false, reason: `TXT record "${TXT_PREFIX}=${token}" not found.` };
+  // ── TXT ──────────────────────────────────────────────────────────────────
+  let txtRecords: string[][] = [];
+  try {
+    txtRecords = await dns.resolveTxt(domain);
+  } catch (err: any) {
+    if (err.code === 'ENODATA' || err.code === 'ENOTFOUND') {
+      return { ok: false, reason: 'TXT record not found. It may not have propagated yet.' };
+    }
+    throw err;
+  }
+
+  const isTxtVerified = txtRecords.flat().includes(expectedTxtValue);
+  if (!isTxtVerified) {
+    return {
+      ok: false,
+      reason: `TXT record "${expectedTxtValue}" not found. Please double-check the value at your registrar.`,
+    };
+  }
+
+  // ── MX ───────────────────────────────────────────────────────────────────
+  let mxRecords: MxRecord[] = [];
+  try {
+    mxRecords = await dns.resolveMx(domain);
+  } catch (err: any) {
+    if (err.code === 'ENODATA' || err.code === 'ENOTFOUND') {
+      return {
+        ok: false,
+        reason: `MX record not found. Please add an MX record pointing to ${expectedMxHost}.`,
+      };
+    }
+    throw err;
+  }
+
+  const isMxValid = mxRecords.some(
+    mx =>
+      mx.exchange.toLowerCase() === expectedMxHost.toLowerCase() ||
+      mx.exchange.toLowerCase().endsWith('.freecustom.email'),
+  );
+
+  if (!isMxValid) {
+    return {
+      ok: false,
+      reason: `MX record must point to ${expectedMxHost}. Current MX records: ${mxRecords.map(m => m.exchange).join(', ')}`,
+    };
+  }
+
   return { ok: true };
 }
 
-/** Resolve userId from ?wyiUserId query param, check plan, return userId or null */
-async function resolveAndGate(req: Request, res: Response): Promise<string | null> {
-  const userId = req.query.wyiUserId as string | undefined;
-  if (!userId) {
+// ─────────────────────────────────────────────────────────────────────────────
+//  Plan gate + user resolution
+//  Returns the resolved IUser (with canonical wyiUserId) or null if the
+//  response has already been sent.
+// ─────────────────────────────────────────────────────────────────────────────
+
+async function resolveAndGate(req: Request, res: Response): Promise<IUser | null> {
+  const rawId = req.query.wyiUserId as string | undefined;
+  if (!rawId) {
     res.status(400).json({ success: false, error: 'missing_param', message: 'wyiUserId required.' });
     return null;
   }
-  const user = await db.collection('users').findOne({ wyiUserId: userId }, { projection: { apiPlan: 1 } });
+
+  const user = await getUser(rawId);
   if (!user) {
     res.status(404).json({ success: false, error: 'user_not_found' });
     return null;
   }
-  const plan: ApiPlanName = user.apiPlan ?? 'free';
+
+  const plan: ApiPlanName = (user as any).apiPlan ?? 'free';
   if (!CUSTOM_DOMAIN_PLANS.includes(plan)) {
     res.status(403).json({
-      success: false,
-      error:   'plan_required',
-      message: 'Custom domains via the API require Growth ($49/mo) or Enterprise ($149/mo) plan.',
+      success:     false,
+      error:       'plan_required',
+      message:     'Custom domains via the API require Growth ($49/mo) or Enterprise ($149/mo) plan.',
       upgrade_url: 'https://freecustom.email/api/pricing',
     });
     return null;
   }
-  return userId;
+
+  return user;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Handlers
+//  GET /user/api-custom-domains
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function listApiCustomDomains(req: Request, res: Response): Promise<void> {
-  const userId = await resolveAndGate(req, res);
-  if (!userId) return;
+  const user = await resolveAndGate(req, res);
+  if (!user) return;
+
   try {
-    const user = await db.collection('users').findOne({ wyiUserId: userId }, { projection: { customDomains: 1 } });
-    const list = (user?.customDomains ?? []).map((d: any) => ({
-      domain:    d.domain,
-      verified:  !!d.verified,
+    const full = await db.collection('users').findOne(
+      { _id: user._id },
+      { projection: { customDomains: 1 } },
+    );
+
+    const list = ((full?.customDomains ?? []) as any[]).map(d => ({
+      domain:     d.domain,
+      verified:   !!d.verified,
       mx_record:  d.mxRecord  ?? MX_RECORD,
       txt_record: d.txtRecord ?? '',
-      added_at:  d.addedAt ?? null,
+      added_at:   d.addedAt   ?? null,
     }));
+
     res.json({ success: true, count: list.length, data: list });
-  } catch { res.status(500).json({ success: false, error: 'server_error' }); }
+  } catch {
+    res.status(500).json({ success: false, error: 'server_error' });
+  }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  POST /user/api-custom-domains
+// ─────────────────────────────────────────────────────────────────────────────
+
 export async function addApiCustomDomain(req: Request, res: Response): Promise<void> {
-  const userId = await resolveAndGate(req, res);
-  if (!userId) return;
+  const user = await resolveAndGate(req, res);
+  if (!user) return;
 
   const { domain } = req.body as { domain?: string };
-  if (!domain) { res.status(400).json({ success: false, error: 'missing_field', message: '`domain` required.' }); return; }
+  if (!domain) {
+    res.status(400).json({ success: false, error: 'missing_field', message: '`domain` required.' });
+    return;
+  }
 
   const norm = domain.trim().toLowerCase();
-  if (!isValidDomain(norm)) { res.status(400).json({ success: false, error: 'invalid_domain', message: 'Invalid domain name.' }); return; }
+  if (!isValidDomain(norm)) {
+    res.status(400).json({ success: false, error: 'invalid_domain', message: 'Invalid domain name.' });
+    return;
+  }
 
   try {
-    const user = await db.collection('users').findOne({ wyiUserId: userId }, { projection: { customDomains: 1 } });
-    const existing: Array<{ domain: string }> = user?.customDomains ?? [];
+    const full = await db.collection('users').findOne(
+      { _id: user._id },
+      { projection: { customDomains: 1 } },
+    );
+    const existing: any[] = full?.customDomains ?? [];
 
+    // Idempotent — return existing entry unchanged
     const found = existing.find(d => d.domain === norm);
-    if (found) { res.json({ success: true, message: 'Already added.', data: { ...found, mx_record: (found as any).mxRecord, txt_record: (found as any).txtRecord } }); return; }
+    if (found) {
+      res.json({
+        success: true,
+        message: 'Already added.',
+        data: {
+          domain:     found.domain,
+          verified:   !!found.verified,
+          mx_record:  found.mxRecord  ?? MX_RECORD,
+          txt_record: found.txtRecord ?? '',
+          added_at:   found.addedAt   ?? null,
+        },
+      });
+      return;
+    }
 
-    if (existing.length >= MAX_DOMAINS) { res.status(400).json({ success: false, error: 'limit_reached', message: `Max ${MAX_DOMAINS} custom domains.` }); return; }
+    if (existing.length >= MAX_DOMAINS) {
+      res.status(400).json({ success: false, error: 'limit_reached', message: `Max ${MAX_DOMAINS} custom domains.` });
+      return;
+    }
 
-    const token    = makeToken(norm, userId);
+    const token    = makeToken(norm, user.wyiUserId);
     const txtValue = `${TXT_PREFIX}=${token}`;
-    const entry    = { domain: norm, verified: false, mxRecord: MX_RECORD, txtRecord: txtValue, addedAt: new Date().toISOString() };
+    const entry    = {
+      domain:    norm,
+      verified:  false,
+      mxRecord:  MX_RECORD,
+      txtRecord: txtValue,
+      addedAt:   new Date().toISOString(),
+    };
 
-    await db.collection('users').updateOne({ wyiUserId: userId }, { $addToSet: { customDomains: entry } } as any);
+    await db.collection('users').updateOne(
+      { _id: user._id },
+      { $addToSet: { customDomains: entry } } as any,
+    );
 
     res.status(201).json({
       success: true,
@@ -153,67 +258,154 @@ export async function addApiCustomDomain(req: Request, res: Response): Promise<v
         txt_record: txtValue,
         added_at:   entry.addedAt,
         dns_records: [
-          { type: 'MX',  hostname: '@', value: MX_RECORD,  priority: '10', ttl: 'Auto' },
-          { type: 'TXT', hostname: '@', value: txtValue,                    ttl: 'Auto' },
+          { type: 'MX',  hostname: '@', value: MX_RECORD, priority: '10', ttl: 'Auto' },
+          { type: 'TXT', hostname: '@', value: txtValue,                   ttl: 'Auto' },
         ],
+        next_step: `POST /v1/custom-domains/${norm}/verify`,
       },
     });
-  } catch { res.status(500).json({ success: false, error: 'server_error' }); }
-}
-
-export async function verifyApiCustomDomain(req: Request, res: Response): Promise<void> {
-  const userId = await resolveAndGate(req, res);
-  if (!userId) return;
-
-  const domain = (req.params.domain ?? '').toLowerCase();
-  try {
-    const user  = await db.collection('users').findOne({ wyiUserId: userId }, { projection: { customDomains: 1 } });
-    const entry = (user?.customDomains ?? []).find((d: any) => d.domain === domain);
-
-    if (!entry) { res.status(404).json({ success: false, error: 'domain_not_found' }); return; }
-    if (entry.verified) { res.json({ success: true, verified: true, message: 'Already verified.' }); return; }
-
-    const token  = makeToken(domain, userId);
-    const result = await checkDns(domain, token);
-
-    if (result.ok) {
-      await db.collection('users').updateOne(
-        { wyiUserId: userId, 'customDomains.domain': domain },
-        { $set: { 'customDomains.$.verified': true } },
-      );
-      res.json({ success: true, verified: true, message: `"${domain}" verified.`, data: { domain, verified: true, mx_record: entry.mxRecord, txt_record: entry.txtRecord } });
-    } else {
-      res.status(422).json({ success: false, verified: false, error: 'verification_failed', message: result.reason });
-    }
-  } catch (err) {
-    console.error('[api-custom-domains] verify error:', err);
+  } catch {
     res.status(500).json({ success: false, error: 'server_error' });
   }
 }
 
-export async function deleteApiCustomDomain(req: Request, res: Response): Promise<void> {
-  const userId = await resolveAndGate(req, res);
-  if (!userId) return;
+// ─────────────────────────────────────────────────────────────────────────────
+//  POST /user/api-custom-domains/:domain/verify
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function verifyApiCustomDomain(req: Request, res: Response): Promise<void> {
+  const user = await resolveAndGate(req, res);
+  if (!user) return;
 
   const domain = (req.params.domain ?? '').toLowerCase();
+
   try {
-    const user = await db.collection('users').findOne({ wyiUserId: userId }, { projection: { customDomains: 1, apiInboxes: 1 } });
-    if (!(user?.customDomains ?? []).some((d: any) => d.domain === domain)) {
-      res.status(404).json({ success: false, error: 'domain_not_found' });
+    // Use positional projection to pull just this domain's subdocument
+    const full = await db.collection('users').findOne(
+      { _id: user._id, 'customDomains.domain': domain },
+      { projection: { 'customDomains.$': 1 } },
+    );
+    const entry = full?.customDomains?.[0] as any | undefined;
+
+    if (!entry) {
+      res.status(404).json({
+        success: false,
+        error:   'domain_not_found',
+        message: `Domain "${domain}" not found. Add it first via POST /v1/custom-domains.`,
+      });
       return;
     }
 
-    await db.collection('users').updateOne({ wyiUserId: userId }, { $pull: { customDomains: { domain } } } as any);
+    if (entry.verified) {
+      res.json({ success: true, verified: true, message: 'Domain is already verified.' });
+      return;
+    }
 
-    const toRemove: string[] = (user?.apiInboxes ?? []).filter((a: string) => a.endsWith(`@${domain}`));
+    const token  = makeToken(domain, user.wyiUserId);
+    const result = await checkDns(domain, token, entry.mxRecord ?? MX_RECORD);
+
+    if (!result.ok) {
+      res.status(422).json({
+        success:  false,
+        verified: false,
+        error:    'verification_failed',
+        message:  result.reason,
+        hint:     'DNS propagation can take up to 48 hours.',
+        dns_records_needed: [
+          { type: 'MX',  hostname: '@', value: entry.mxRecord ?? MX_RECORD, priority: '10' },
+          { type: 'TXT', hostname: '@', value: entry.txtRecord ?? '' },
+        ],
+      });
+      return;
+    }
+
+    // Mark verified on this user
+    await db.collection('users').updateOne(
+      { _id: user._id, 'customDomains.domain': domain },
+      { $set: { 'customDomains.$.verified': true } },
+    );
+
+    // Remove domain from every other user (mirrors verifyDomainHandler)
+    await db.collection('users').updateMany(
+      { _id: { $ne: user._id } },
+      { $pull: { customDomains: { domain } } } as any,
+    );
+
+    // Add to Haraka's Redis set so it starts accepting mail immediately
+    await redis.sAdd('verified_custom_domains', domain);
+
+    res.json({
+      success:  true,
+      verified: true,
+      message:  `Domain "${domain}" verified successfully. You can now register inboxes at @${domain}.`,
+      data: {
+        domain,
+        verified:   true,
+        mx_record:  entry.mxRecord  ?? MX_RECORD,
+        txt_record: entry.txtRecord ?? '',
+      },
+    });
+  } catch (err: any) {
+    console.error('[api-custom-domains] verify error:', err);
+    res.status(500).json({ success: false, error: 'server_error', message: err.message });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DELETE /user/api-custom-domains/:domain
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function deleteApiCustomDomain(req: Request, res: Response): Promise<void> {
+  const user = await resolveAndGate(req, res);
+  if (!user) return;
+
+  const domain = (req.params.domain ?? '').toLowerCase();
+
+  try {
+    const full = await db.collection('users').findOne(
+      { _id: user._id },
+      { projection: { customDomains: 1, apiInboxes: 1 } },
+    );
+
+    const exists = ((full?.customDomains ?? []) as any[]).some(d => d.domain === domain);
+    if (!exists) {
+      res.status(404).json({
+        success: false,
+        error:   'domain_not_found',
+        message: `Domain "${domain}" not found in your account.`,
+      });
+      return;
+    }
+
+    await db.collection('users').updateOne(
+      { _id: user._id },
+      { $pull: { customDomains: { domain } } } as any,
+    );
+
+    // Remove from Haraka's Redis set
+    await redis.sRem('verified_custom_domains', domain);
+
+    // Unregister any API inboxes that used this domain
+    const apiInboxes: string[] = (full?.apiInboxes ?? []) as string[];
+    const toRemove = apiInboxes.filter(a => a.endsWith(`@${domain}`));
+
     if (toRemove.length) {
-      await db.collection('users').updateOne({ wyiUserId: userId }, { $pullAll: { apiInboxes: toRemove } } as any);
+      await db.collection('users').updateOne(
+        { _id: user._id },
+        { $pullAll: { apiInboxes: toRemove } } as any,
+      );
       await Promise.allSettled([
-        ...toRemove.map((a: string) => redis.del(`user_data_cache:${a}`)),
-        ...toRemove.map((a: string) => redis.del(`inbox_owned:${userId}:${a}`)),
+        ...toRemove.map(a => redis.del(`user_data_cache:${a}`)),
+        ...toRemove.map(a => redis.del(`inbox_owned:${user.wyiUserId}:${a}`)),
       ]);
     }
 
-    res.json({ success: true, message: `"${domain}" removed.`, inboxes_removed: toRemove });
-  } catch { res.status(500).json({ success: false, error: 'server_error' }); }
+    res.json({
+      success:         true,
+      message:         `"${domain}" removed.`,
+      inboxes_removed: toRemove,
+    });
+  } catch {
+    res.status(500).json({ success: false, error: 'server_error' });
+  }
 }
