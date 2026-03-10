@@ -45,6 +45,15 @@ import jwt from 'jsonwebtoken';
 import { getApiStatusHandler } from './api-status-handler';
 import { getPaymentLogsHandler } from './payment-logs-handler';
 import { requestDeleteAccountHandler, restoreAccountHandler, getDeletionListHandler } from './deletion-handler';
+import { changeApiPlanHandler } from './api-plan-change-handler';
+import {
+  listApiCustomDomains,
+  addApiCustomDomain,
+  verifyApiCustomDomain,
+  deleteApiCustomDomain,
+} from './api-custom-domains-handler';
+
+
 
 dotenv.config();
 
@@ -70,9 +79,9 @@ connectToMongo().then(() => {
 
   app.use((req, res, next) => {
     const isWsUpgrade = req.headers.upgrade?.toLowerCase() === 'websocket';
-    const isV1        = req.path.startsWith('/v1');
+    const isV1 = req.path.startsWith('/v1');
     // /domains and /domains/expiry skip internal-key auth — they use JWT instead
-    const isDomains   = req.path === '/domains' || req.path.startsWith('/domains/');
+    const isDomains = req.path === '/domains' || req.path.startsWith('/domains/');
     if (isWsUpgrade || isV1 || isDomains) return next();
     return internalApiAuth(req, res, next);
   });
@@ -111,11 +120,17 @@ connectToMongo().then(() => {
   app.delete('/user/mute', unmuteSenderHandler);
   app.post('/user/inboxes', addInboxHandler);
   app.post('/user/fcm-token', saveFcmTokenHandler);
+  app.get('/user/api-custom-domains', listApiCustomDomains);
+  app.post('/user/api-custom-domains', addApiCustomDomain);
+  app.post('/user/api-custom-domains/:domain/verify', verifyApiCustomDomain);
+  app.delete('/user/api-custom-domains/:domain', deleteApiCustomDomain);
+
 
   // ── Billing ────────────────────────────────────────────────────────────────
   app.post('/user/upgrade', upgradeUserSubscriptionHandler);
   app.post('/paddle/subscription-event', handlePaddleSubscriptionEvent);
   app.get('/user/payment-logs/:wyiUserId', getPaymentLogsHandler);
+  app.post('/user/api-plan/change', changeApiPlanHandler);
 
   // ── API key management ─────────────────────────────────────────────────────
   app.post('/user/api-keys', generateApiKeyHandler);
@@ -192,7 +207,7 @@ connectToMongo().then(() => {
   (async () => {
     await subscriber.pSubscribe('mailbox:events:*', (message, channel) => {
       try {
-        const event   = JSON.parse(message);
+        const event = JSON.parse(message);
         const mailbox = channel.split(':')[2];
         if (mailbox === 'stats') { sendStatsToAllStatsClients(); return; }
         notifyMailbox(mailbox, event);
