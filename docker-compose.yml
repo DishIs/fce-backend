@@ -66,6 +66,12 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       RESEND_API_KEY: ${RESEND_API_KEY}
       APP_URL: https://www.freecustom.email
+      PADDLE_PRICE_DEVELOPER: ${PADDLE_PRICE_DEVELOPER}
+      PADDLE_PRICE_STARTUP: ${PADDLE_PRICE_STARTUP}
+      PADDLE_PRICE_GROWTH: ${PADDLE_PRICE_GROWTH}
+      PADDLE_PRICE_ENTERPRISE: ${PADDLE_PRICE_ENTERPRISE}
+      PADDLE_ENV: production
+      PADDLE_API_KEY: ${PADDLE_API_KEY}
     expose:
       - "3000"
     restart: unless-stopped
