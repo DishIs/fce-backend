@@ -2,7 +2,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  GET  /user/api-status/:wyiUserId   — full API account snapshot for dashboard
 //
-//  Protected by internalApiAuth (same as all other /user/* routes).
+//  FIX 1: Normalize Paddle status to uppercase before comparisons
+//          ("canceled" → "CANCELLED", "active" → "ACTIVE", etc.)
+//  FIX 2: If apiScheduledDowngradeAt has elapsed (or periodEnd has elapsed
+//          for a cancelled sub), treat the plan as 'free' at read-time so the
+//          dashboard reflects reality even if the cron hasn't fired yet.
 // ─────────────────────────────────────────────────────────────────────────────
 import { Request, Response } from 'express';
 import { db } from './mongo';
@@ -11,9 +15,6 @@ import { API_PLANS, ApiPlanName, CREDIT_PACKAGES } from './v1/api-plans';
 
 // ── Monthly usage helper ──────────────────────────────────────────────────────
 
-// FIX: usage is scoped to wyiUserId (not api_key._id).
-// The rate limiter writes  rl:m:{userId}:{YYYY-MM}
-// so this must read the same key — no DB round-trip needed at all.
 async function getMonthlyUsage(wyiUserId: string): Promise<number> {
   try {
     const monthStr = new Date().toISOString().slice(0, 7);
@@ -22,6 +23,48 @@ async function getMonthlyUsage(wyiUserId: string): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+// ── Normalize Paddle status to uppercase ─────────────────────────────────────
+// Paddle can send "canceled", "cancelled", "active", "trialing" in mixed case.
+// Internally we use ALLCAPS. Also normalise American "CANCELED" → "CANCELLED".
+function normStatus(raw?: string | null): string {
+  if (!raw) return '';
+  const up = raw.toUpperCase().trim();
+  // Paddle uses American spelling "CANCELED"; map to our canonical "CANCELLED"
+  return up === 'CANCELED' ? 'CANCELLED' : up;
+}
+
+// ── Resolve the effective plan at read-time ───────────────────────────────────
+// If the subscription was cancelled and periodEnd is in the past (or
+// apiScheduledDowngradeAt has elapsed) we treat the plan as 'free' immediately,
+// regardless of whether the nightly downgrade cron has run yet.
+function resolveEffectivePlan(user: any): ApiPlanName {
+  const storedPlan: ApiPlanName = (user.apiPlan as ApiPlanName) ?? 'free';
+  if (storedPlan === 'free') return 'free';
+
+  const now = Date.now();
+
+  // Check explicit scheduled-downgrade timestamp first
+  if (user.apiScheduledDowngradeAt) {
+    const downAt = new Date(user.apiScheduledDowngradeAt).getTime();
+    if (!isNaN(downAt) && now >= downAt) return 'free';
+  }
+
+  // Check subscription periodEnd for cancelled/cancelling subs
+  const sub = user.apiSubscription;
+  if (sub) {
+    const status     = normStatus(sub.status);
+    const cancelAtEnd: boolean = sub.cancelAtPeriodEnd === true;
+    const periodEnd  = sub.periodEnd ?? sub.canceledAt ?? null;
+
+    if ((status === 'CANCELLED' || cancelAtEnd) && periodEnd) {
+      const endMs = new Date(periodEnd).getTime();
+      if (!isNaN(endMs) && now >= endMs) return 'free';
+    }
+  }
+
+  return storedPlan;
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -42,7 +85,8 @@ export async function getApiStatusHandler(req: Request, res: Response): Promise<
       return res.status(404).json({ success: false, message: 'User not found.' });
     }
 
-    const plan: ApiPlanName = (user.apiPlan as ApiPlanName) ?? 'free';
+    // FIX 2: resolve effective plan (may differ from user.apiPlan if period elapsed)
+    const plan: ApiPlanName = resolveEffectivePlan(user);
     const planConfig        = API_PLANS[plan];
     const credits: number   = user.apiCredits ?? 0;
     const appInboxes: string[] = Array.isArray(user.inboxes)
@@ -58,8 +102,8 @@ export async function getApiStatusHandler(req: Request, res: Response): Promise<
 
     // ── Next plan upsell hint ─────────────────────────────────────────────────
     const planOrder: ApiPlanName[] = ['free', 'developer', 'startup', 'growth', 'enterprise'];
-    const currentIndex  = planOrder.indexOf(plan);
-    const nextPlan      = currentIndex < planOrder.length - 1 ? planOrder[currentIndex + 1] : null;
+    const currentIndex   = planOrder.indexOf(plan);
+    const nextPlan       = currentIndex < planOrder.length - 1 ? planOrder[currentIndex + 1] : null;
     const nextPlanConfig = nextPlan ? API_PLANS[nextPlan] : null;
 
     const upsellNudges: string[] = [];
@@ -69,12 +113,24 @@ export async function getApiStatusHandler(req: Request, res: Response): Promise<
     if (monthlyUsed / monthlyLimit >= 0.8)  upsellNudges.push(`You've used ${percentUsed}% of your monthly quota. Consider upgrading or buying credits.`);
 
     // ── Subscription status badge ─────────────────────────────────────────────
+    // FIX 1: normalise status before comparing so "canceled" == "CANCELLED"
     let subscriptionBadge: string = plan === 'free' ? 'free' : 'active';
     if (sub) {
-      if (sub.status === 'TRIALING')  subscriptionBadge = 'trialing';
-      if (sub.status === 'SUSPENDED') subscriptionBadge = 'payment_failed';
-      if (sub.cancelAtPeriodEnd)      subscriptionBadge = 'cancelling';
-      if (sub.status === 'CANCELLED') subscriptionBadge = 'cancelled';
+      const s = normStatus(sub.status);
+      if (s === 'TRIALING')  subscriptionBadge = 'trialing';
+      if (s === 'SUSPENDED') subscriptionBadge = 'payment_failed';
+      if (sub.cancelAtPeriodEnd) {
+        // If period already elapsed show as fully cancelled, else show as cancelling
+        const periodEnd = sub.periodEnd ?? sub.canceledAt ?? null;
+        const expired   = periodEnd && Date.now() >= new Date(periodEnd).getTime();
+        subscriptionBadge = expired ? 'cancelled' : 'cancelling';
+      }
+      if (s === 'CANCELLED') subscriptionBadge = 'cancelled';
+    }
+
+    // If we resolved the plan down to free at read-time, force badge to cancelled
+    if (plan === 'free' && (user.apiPlan && user.apiPlan !== 'free')) {
+      subscriptionBadge = 'cancelled';
     }
 
     return res.status(200).json({
@@ -90,7 +146,8 @@ export async function getApiStatusHandler(req: Request, res: Response): Promise<
         subscription: sub
           ? {
               subscription_id:      sub.subscriptionId,
-              status:               sub.status,
+              // Always return normalised status so clients don't have to handle casing
+              status:               normStatus(sub.status),
               cancel_at_period_end: sub.cancelAtPeriodEnd ?? false,
               period_end:           sub.periodEnd ?? null,
               canceled_at:          sub.canceledAt ?? null,

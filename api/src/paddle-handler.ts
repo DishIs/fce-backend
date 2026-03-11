@@ -1,4 +1,9 @@
 // api/src/paddle-handler.ts
+//
+//  FIX: Paddle sends lowercase/American-spelling statuses ("canceled", "active",
+//       "trialing"). Added normStatus() helper and applied it everywhere we write
+//       status to the DB, so stored values are always consistent ALLCAPS strings.
+//
 import { Request, Response } from 'express';
 import { db } from './mongo';
 import { ISubscription, IPaymentLog } from './mongo';
@@ -30,6 +35,15 @@ interface PaddleSubscriptionEventPayload {
   amount?:          string | number;
   currency?:        string;
   rawEvent:         any;
+}
+
+// ── Normalize Paddle status strings to ALLCAPS canonical form ────────────────
+// Paddle uses American spelling ("canceled") and mixed case ("active", "trialing").
+// We always store ALLCAPS so comparisons are predictable everywhere.
+function normStatus(raw?: string | null): string {
+  if (!raw) return '';
+  const up = raw.toUpperCase().trim();
+  return up === 'CANCELED' ? 'CANCELLED' : up;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -76,7 +90,8 @@ async function handleApiPlanEvent(
   switch (eventType) {
 
     case 'ACTIVATED': {
-      const isTrialing = payload.status === 'trialing';
+      const rawStatus  = normStatus(payload.status);
+      const isTrialing = rawStatus === 'TRIALING';
       await db.collection('users').updateOne(userQuery(userId), {
         $set: {
           apiPlan,
@@ -129,6 +144,8 @@ async function handleApiPlanEvent(
 
       await db.collection('users').updateOne(userQuery(userId), {
         $set: {
+          // Keep plan active until periodEnd; resolveEffectivePlan() in status handler
+          // will downgrade automatically when the date passes.
           'apiSubscription.status':            'ACTIVE',
           'apiSubscription.cancelAtPeriodEnd': true,
           'apiSubscription.canceledAt':        payload.canceledAt ?? new Date().toISOString(),
@@ -173,7 +190,8 @@ async function handleApiPlanEvent(
         $set: {
           apiPlan:                             newPlan,
           'apiSubscription.planId':            payload.priceId,
-          'apiSubscription.status':            (payload.status ?? 'ACTIVE') as any,
+          // normStatus ensures we store "ACTIVE" not "active"
+          'apiSubscription.status':            normStatus(payload.status) || 'ACTIVE',
           'apiSubscription.lastUpdated':       new Date(),
           ...(payload.nextBilledAt && { 'apiSubscription.nextBilledAt': payload.nextBilledAt }),
         },
@@ -256,10 +274,11 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
     switch (eventType) {
 
       case 'ACTIVATED': {
+        const rawStatus = normStatus(payload.status);
         const subscriptionData: ISubscription = {
           provider: 'paddle', subscriptionId: subscriptionId!,
           planId: payload.priceId,
-          status: payload.status === 'trialing' ? 'TRIALING' : 'ACTIVE',
+          status: rawStatus === 'TRIALING' ? 'TRIALING' : 'ACTIVE',
           cancelAtPeriodEnd: false,
           startTime:   payload.startTime ?? new Date().toISOString(),
           payerEmail:  payload.payerEmail,
@@ -272,7 +291,7 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           $set: { plan: 'pro', subscription: subscriptionData },
           $unset: { scheduledDowngradeAt: '' },
         });
-        if (payload.status === 'trialing') {
+        if (rawStatus === 'TRIALING') {
           await db.collection('users').updateOne(userQuery(userId), { $set: { hadTrial: true } });
         }
         await logPaymentEvent(userId, subscriptionId!, 'subscription_created', payload);
@@ -347,7 +366,11 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
 
       case 'UPDATED': {
         await db.collection('users').updateOne(userQuery(userId), {
-          $set: { 'subscription.planId': payload.priceId, 'subscription.status': (payload.status ?? 'ACTIVE') as ISubscription['status'], 'subscription.lastUpdated': new Date() },
+          $set: {
+            'subscription.planId':   payload.priceId,
+            'subscription.status':   (normStatus(payload.status) || 'ACTIVE') as ISubscription['status'],
+            'subscription.lastUpdated': new Date(),
+          },
         });
         console.log(`[Paddle] User ${userId} subscription UPDATED.`);
         break;
