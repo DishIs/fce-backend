@@ -11,6 +11,9 @@ import { migrateUserEmailsToPro } from './upgrade-migration';
 import { sendEmail } from './email/resend';
 import { getCancellationEmailHtml, getApiPlanCancellationEmailHtml } from './email/templates';
 import { ApiPlanName } from './v1/api-plans';
+import { syncUserFeatures } from './feature-sync';
+import { client as redis } from './redis';
+
 
 type PaddleEventType =
   | 'TRIALING' | 'ACTIVATED' | 'CANCELLED' | 'SUSPENDED'
@@ -206,6 +209,9 @@ async function handleApiPlanEvent(
       break;
     }
   }
+
+  await syncUserFeatures(db, redis, userId);
+
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -221,7 +227,6 @@ async function handleCreditPurchase(userId: string, payload: PaddleSubscriptionE
 
   const txId     = payload.rawEvent?.data?.id ?? payload.subscriptionId ?? '';
   const idempKey = `credit_tx:${txId}`;
-  const { client: redis } = await import('./redis');
 
   if (await redis.get(idempKey)) {
     console.log(`[Paddle] Credit tx ${txId} already processed.`);

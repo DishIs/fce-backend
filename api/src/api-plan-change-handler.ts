@@ -17,6 +17,9 @@
 import { Request, Response } from 'express';
 import { db } from './mongo';
 import { API_PLANS, ApiPlanName } from './v1/api-plans';
+import { syncUserFeatures } from './feature-sync';
+import { client as redis } from './redis';
+
 
 // ── Price-ID map from env ─────────────────────────────────────────────────────
 // .env keys:
@@ -231,6 +234,12 @@ export async function changeApiPlanHandler(req: Request, res: Response): Promise
       });
     }
   }
+
+    // NEW: Sync webhooks/websockets immediately.
+  // Upgrades will instantly restore automations. Scheduled downgrades remain active 
+  // because `resolveEffectivePlan()` inside syncUserFeatures respects period end dates.
+  await syncUserFeatures(db, redis, rawUserId);
+
 
   // ── Log reason ────────────────────────────────────────────────────────────
   logPlanChangeReason(user.wyiUserId, currentPlan, targetPlan, change, reason, comment)

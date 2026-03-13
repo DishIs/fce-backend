@@ -27,30 +27,31 @@ import {
   getDowngradeCompleteEmailHtml,
   getApiPlanDowngradeEmailHtml,
 } from './email/templates';
+import { syncUserFeatures } from './feature-sync';
 
 dotenv.config();
 
 // ── Config ────────────────────────────────────────────────────────────────────
-const MONGO_URI         = process.env.MONGO_URI        || 'mongodb://localhost:27017';
-const REDIS_URL         = process.env.REDIS_URL        || 'redis://localhost:6379';
-const DB_NAME           = 'freecustomemail';
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017';
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
+const DB_NAME = 'freecustomemail';
 // FIX 3: was 6 hours — that meant up to 6h of paid access after cancellation.
 // 1 hour is a much more reasonable SLA.
-const INTERVAL_MS       = parseInt(process.env.EXPIRY_INTERVAL_MS || '', 10) || 1 * 60 * 60 * 1000;
-const FREE_MAILBOX_SIZE = parseInt(process.env.FREE_MAILBOX_SIZE  || '20',    10);
-const FREE_MAILBOX_TTL  = parseInt(process.env.FREE_MAILBOX_TTL   || '86400', 10);
-const PLAN_CACHE_TTL    = parseInt(process.env.PLAN_CACHE_TTL     || '3600',  10);
+const INTERVAL_MS = parseInt(process.env.EXPIRY_INTERVAL_MS || '', 10) || 1 * 60 * 60 * 1000;
+const FREE_MAILBOX_SIZE = parseInt(process.env.FREE_MAILBOX_SIZE || '20', 10);
+const FREE_MAILBOX_TTL = parseInt(process.env.FREE_MAILBOX_TTL || '86400', 10);
+const PLAN_CACHE_TTL = parseInt(process.env.PLAN_CACHE_TTL || '3600', 10);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface UserToProcess {
-  _id:                      ObjectId;
-  wyiUserId:                string;
-  email:                    string;
-  inboxes:                  string[];
-  apiInboxes:               string[];   // may be absent in older docs — always use ?? []
-  apiPlan:                  string;
-  plan:                     string;
-  scheduledDowngradeAt?:    Date;
+  _id: ObjectId;
+  wyiUserId: string;
+  email: string;
+  inboxes: string[];
+  apiInboxes: string[];   // may be absent in older docs — always use ?? []
+  apiPlan: string;
+  plan: string;
+  scheduledDowngradeAt?: Date;
   apiScheduledDowngradeAt?: Date;
 }
 
@@ -62,10 +63,10 @@ async function demoteInboxToFree(
   redis: ReturnType<typeof createClient>,
   mailbox: string,
 ): Promise<void> {
-  const proIndex  = `maildrop:pro:${mailbox}:index`;
-  const proData   = `maildrop:pro:${mailbox}:data`;
+  const proIndex = `maildrop:pro:${mailbox}:index`;
+  const proData = `maildrop:pro:${mailbox}:data`;
   const freeIndex = `maildrop:free:${mailbox}:index`;
-  const freeData  = `maildrop:free:${mailbox}:data`;
+  const freeData = `maildrop:free:${mailbox}:data`;
 
   const entries = await redis.zRangeWithScores(proIndex, 0, -1, { REV: true });
   if (!entries || entries.length === 0) {
@@ -73,9 +74,9 @@ async function demoteInboxToFree(
     return;
   }
 
-  const keep  = entries.slice(0, FREE_MAILBOX_SIZE);
-  const ids   = keep.map(e => e.value);
-  const raws  = await redis.hmGet(proData, ids);
+  const keep = entries.slice(0, FREE_MAILBOX_SIZE);
+  const ids = keep.map(e => e.value);
+  const raws = await redis.hmGet(proData, ids);
   const multi = redis.multi();
 
   for (let i = 0; i < keep.length; i++) {
@@ -86,7 +87,7 @@ async function demoteInboxToFree(
   }
 
   multi.expire(freeIndex, FREE_MAILBOX_TTL);
-  multi.expire(freeData,  FREE_MAILBOX_TTL);
+  multi.expire(freeData, FREE_MAILBOX_TTL);
   multi.del(proIndex);
   multi.del(proData);
   await multi.exec();
@@ -105,7 +106,7 @@ async function refreshPlanCacheForInboxes(
 ): Promise<void> {
   if (!inboxes.length) return;
   const userData = JSON.stringify({ plan, userId: userId.toString(), isVerified: false });
-  const multi    = redis.multi();
+  const multi = redis.multi();
   for (const inbox of inboxes) {
     multi.set(`user_data_cache:${inbox}`, userData, { EX: PLAN_CACHE_TTL });
   }
@@ -117,7 +118,7 @@ async function refreshPlanCacheForInboxes(
 // for up to 60s after the worker has already written 'free' to MongoDB.
 // We look up all active key hashes for the user and delete their cache entries.
 async function invalidateApiKeyCache(
-  db:    any,
+  db: any,
   redis: ReturnType<typeof createClient>,
   wyiUserId: string,
 ): Promise<void> {
@@ -142,9 +143,9 @@ async function invalidateApiKeyCache(
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function downgradeAppPlan(
-  db:    any,
+  db: any,
   redis: ReturnType<typeof createClient>,
-  user:  UserToProcess,
+  user: UserToProcess,
 ): Promise<void> {
   console.log(`  [app] Downgrading ${user.wyiUserId} (${user.email}) from Pro → free`);
 
@@ -163,13 +164,13 @@ async function downgradeAppPlan(
     { _id: user._id },
     {
       $set: {
-        plan:                             'free',
-        'subscription.status':            'CANCELLED',
+        plan: 'free',
+        'subscription.status': 'CANCELLED',
         'subscription.cancelAtPeriodEnd': false,
-        'subscription.lastUpdated':       new Date(),
+        'subscription.lastUpdated': new Date(),
       },
       $unset: {
-        scheduledDowngradeAt:     '',
+        scheduledDowngradeAt: '',
         'subscription.periodEnd': '',
       },
     },
@@ -179,10 +180,10 @@ async function downgradeAppPlan(
 
   if (user.email) {
     sendEmail({
-      to:      user.email,
-      from:    'billing',
+      to: user.email,
+      from: 'billing',
       subject: 'Your FreeCustom.Email account has been downgraded to free',
-      html:    getDowngradeCompleteEmailHtml(),
+      html: getDowngradeCompleteEmailHtml(),
     }).catch(err => console.error(`  [resend] Downgrade email failed for ${user.email}:`, err));
   }
 
@@ -194,9 +195,9 @@ async function downgradeAppPlan(
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function downgradeApiPlan(
-  db:    any,
+  db: any,
   redis: ReturnType<typeof createClient>,
-  user:  UserToProcess,
+  user: UserToProcess,
 ): Promise<void> {
   const previousPlan = user.apiPlan;
   console.log(`  [api] Downgrading ${user.wyiUserId} API plan: ${previousPlan} → free`);
@@ -226,13 +227,13 @@ async function downgradeApiPlan(
     { _id: user._id },
     {
       $set: {
-        apiPlan:                             'free',
-        'apiSubscription.status':            'CANCELLED',
+        apiPlan: 'free',
+        'apiSubscription.status': 'CANCELLED',
         'apiSubscription.cancelAtPeriodEnd': false,
-        'apiSubscription.lastUpdated':       new Date(),
+        'apiSubscription.lastUpdated': new Date(),
       },
       $unset: {
-        apiScheduledDowngradeAt:     '',
+        apiScheduledDowngradeAt: '',
         'apiSubscription.periodEnd': '',
       },
     },
@@ -241,12 +242,16 @@ async function downgradeApiPlan(
   // FIX 2: Bust api_key_cache so auth middleware sees 'free' immediately
   await invalidateApiKeyCache(db, redis, user.wyiUserId);
 
+  // NEW: Sync user automation features (Disable Webhooks & broadcast WS drop)
+  await syncUserFeatures(db, redis, user.wyiUserId);
+
+
   if (user.email) {
     sendEmail({
-      to:      user.email,
-      from:    'api',
+      to: user.email,
+      from: 'api',
       subject: `Your FreeCustom.Email API ${previousPlan} plan has ended`,
-      html:    getApiPlanDowngradeEmailHtml(previousPlan),
+      html: getApiPlanDowngradeEmailHtml(previousPlan),
     }).catch(err => console.error(`  [resend] API downgrade email failed for ${user.email}:`, err));
   }
 
@@ -258,7 +263,7 @@ async function downgradeApiPlan(
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function runExpirySweep(
-  db:    any,
+  db: any,
   redis: ReturnType<typeof createClient>,
 ): Promise<void> {
   const now = new Date();
@@ -272,14 +277,14 @@ async function runExpirySweep(
       { apiPlan: { $exists: true, $ne: 'free' }, apiScheduledDowngradeAt: { $lte: now } },
     ],
   }).project({
-    _id:                     1,
-    wyiUserId:               1,
-    email:                   1,
-    inboxes:                 1,
-    apiInboxes:              1,
-    plan:                    1,
-    apiPlan:                 1,
-    scheduledDowngradeAt:    1,
+    _id: 1,
+    wyiUserId: 1,
+    email: 1,
+    inboxes: 1,
+    apiInboxes: 1,
+    plan: 1,
+    apiPlan: 1,
+    scheduledDowngradeAt: 1,
     apiScheduledDowngradeAt: 1,
   }).toArray();
 
@@ -329,7 +334,7 @@ async function main() {
   const once = process.argv.includes('--once');
 
   const mongoClient = new MongoClient(MONGO_URI);
-  const redis       = createClient({ url: REDIS_URL });
+  const redis = createClient({ url: REDIS_URL });
   redis.on('error', err => console.error('Redis error:', err));
 
   await mongoClient.connect();
