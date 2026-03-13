@@ -11,6 +11,8 @@ import domainsRouter from './routes/domains';
 import customDomainsRouter from './routes/custom-domains';   // ← NEW
 import { db } from '../mongo';
 import { API_PLANS, CREDIT_PACKAGES } from './api-plans';
+// router.ts — add this line with the other sub-routers
+import webhookRouter from './routes/webhooks';
 
 const v1Router = Router();
 
@@ -22,6 +24,8 @@ v1Router.use(apiRateLimit);
 v1Router.use('/inboxes', inboxRouter);
 v1Router.use('/domains', domainsRouter);
 v1Router.use('/custom-domains', customDomainsRouter);        // ← NEW
+
+v1Router.use('/webhooks', webhookRouter);  // ← auth + rate limit applied automatically
 
 // ── GET /v1/me ────────────────────────────────────────────────────────────────
 v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {

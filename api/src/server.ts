@@ -52,6 +52,8 @@ import {
   verifyApiCustomDomain,
   deleteApiCustomDomain,
 } from './api-custom-domains-handler';
+import cors from 'cors';
+import { notifyWebhooks } from './v1/routes/webhooks';
 
 
 
@@ -76,6 +78,21 @@ connectToMongo().then(() => {
   };
 
   app.use(express.json());
+
+  // Allow all origins for the public /v1 API, block everything else
+  app.use('/v1', cors({
+    origin: '*',                          // public API — any origin is fine
+    methods: ['GET', 'POST', 'DELETE'],
+    allowedHeaders: ['Authorization', 'Content-Type'],
+    exposedHeaders: [
+      'X-API-Plan',
+      'X-RateLimit-Limit-Second',
+      'X-RateLimit-Remaining-Second',
+      'X-RateLimit-Limit-Month',
+      'X-RateLimit-Remaining-Month',
+      'Retry-After',
+    ],
+  }));
 
   app.use((req, res, next) => {
     const isWsUpgrade = req.headers.upgrade?.toLowerCase() === 'websocket';
@@ -212,6 +229,9 @@ connectToMongo().then(() => {
         if (mailbox === 'stats') { sendStatsToAllStatsClients(); return; }
         notifyMailbox(mailbox, event);
         notifyApiWsClients(mailbox, event);
+        notifyWebhooks(mailbox, event).catch(err =>
+          console.error('[pubsub] notifyWebhooks error:', err)
+        );
       } catch (e) {
         console.error('Failed to handle pub/sub message:', e);
       }

@@ -15,7 +15,7 @@
   "license": "ISC",
   "devDependencies": {
     "@swc/jest": "^0.2.20",
-    "@types/cors": "^2.8.12",
+    "@types/cors": "^2.8.19",
     "@types/express": "^4.17.13",
     "@types/jest": "^27.5.0",
     "@types/jsonwebtoken": "^9.0.10",
@@ -28,7 +28,7 @@
   },
   "dependencies": {
     "big-integer": "^1.6.52",
-    "cors": "^2.8.5",
+    "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.21.0",
     "jsonwebtoken": "^9.0.2",
