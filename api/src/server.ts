@@ -79,13 +79,10 @@ connectToMongo().then(() => {
 
   app.use(express.json());
 
-  // Allow all origins for the public /v1 API, block everything else
-  const v1Cors = cors({
-    origin: '*',                          // public API — any origin is fine
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    // Omitting `allowedHeaders` lets the cors middleware automatically reflect 
-    // the headers requested by the browser in the preflight check.
-    exposedHeaders: [
+  app.use(cors({
+    origin: '*',
+    methods:['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    exposedHeaders:[
       'X-API-Plan',
       'X-RateLimit-Limit-Second',
       'X-RateLimit-Remaining-Second',
@@ -93,13 +90,7 @@ connectToMongo().then(() => {
       'X-RateLimit-Remaining-Month',
       'Retry-After',
     ],
-  });
-
-  // Apply CORS to all /v1 requests
-  app.use('/v1', v1Cors);
-
-  // Explicitly handle OPTIONS preflight routing for Express
-  app.options('/v1/*', v1Cors);
+  }));
 
 
   app.use((req, res, next) => {
