@@ -102,23 +102,29 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
       { wyiUserId: req.apiUser!.userId },
       { projection: { apiInboxes: 1, inboxes: 1 } },
     );
-    const apiInboxesList = user?.apiInboxes ?? [];
-    const appInboxesList = Array.isArray(user?.inboxes)
-      ? user.inboxes.map((i: any) => String(i).toLowerCase())
-      : [];
+    const apiInboxesList: string[] = user?.apiInboxes ?? [];
+ 
+    // `data` returns objects so Make/Zapier can map individual fields.
+    // `api_inboxes` keeps the flat string array for backwards compat
+    // with any existing direct API consumers.
+    const dataObjects = apiInboxesList.map((addr: string) => ({
+      inbox:  addr,
+      local:  addr.split('@')[0],
+      domain: addr.split('@')[1],
+    }));
+ 
     return res.json({
       success:         true,
-      data:            apiInboxesList,
+      data:            dataObjects,
       count:           apiInboxesList.length,
       api_inboxes:     apiInboxesList,
       api_inbox_count: apiInboxesList.length,
-      app_inboxes:     appInboxesList,
-      app_inbox_count: appInboxesList.length,
     });
   } catch {
     return res.status(500).json({ success: false, error: 'server_error' });
   }
 });
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /v1/inboxes — register an inbox
