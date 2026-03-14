@@ -74,7 +74,7 @@ const OTP_KW = `(?:
   \\b(?:otp|pin|token|passcode|access[\\s-]*code)\\b
 )`.replace(/\s+/g, '');
 
-const RE_KW_BEFORE   = new RegExp(`${OTP_KW}[^0-9a-zA-Z]{0,25}(\\d{4,8})`, 'i');
+const RE_KW_BEFORE = new RegExp(`${OTP_KW}[^0-9]{0,60}?(\\d{4,8})(?!\\d)`, 'i');
 const RE_KW_AFTER    = new RegExp(`(?<![.\\w@#])(?<![\\d])(\\d{4,8})(?![.\\w@#%])(?:[^0-9]{0,40})${OTP_KW}`, 'i');
 const RE_IS_YOUR_CODE = /(?<![.\w@#\/\-])(\d{4,8})(?![.\w@#\/\-])\s+is\s+your\s+(?:\w+\s+)?code\b/i;
 const RE_SIX          = /(?<![.\w@#\/\-])(\d{6})(?![.\w@#\/\-])/;
@@ -151,13 +151,13 @@ const CODE_CAP = `((?:${SEG})(?:-(?:${SEG})){0,3})`;
 // P-A1: keyword + colon/dash immediately + code
 // "code: ZXH-QCS"  "otp: AB12"  "token-AB-CD"
 const RE_A1_STRICT = new RegExp(
-    `(?:code|token|otp|pin|passcode)\\s*[:\\-]\\s*${CODE_CAP}(?=[\\s,;.\\n]|$)`, 'i'
+    `(?:code|token|otp|pin|passcode)\\s*[:\\-]\\s*${CODE_CAP}(?![\\w@#])`, 'i'
 );
 
 // P-A2: keyword + optional "is" skip + single-space + code
 // "code ABCDEF"  "code is ABC-123"  "code is: ABC-123"
 const RE_A1_SPACE = new RegExp(
-    `(?:code|token|otp|pin|passcode)\\s+(?:is\\s*[:\\-]?\\s*)?${CODE_CAP}(?=[\\s,;.\\n]|$)`, 'i'
+    `(?:code|token|otp|pin|passcode)\\s+(?:is\\s*[:\\-]?\\s*)?${CODE_CAP}(?![\\w@#])`, 'i'
 );
 
 // P-A3: keyword + 1–3 filler words (last may have colon) + code
@@ -178,7 +178,7 @@ const RE_A2 = new RegExp(
 // P-A5: "your [0–2 words] code is/: VALUE"
 // "Your code is ABC-123"  "Your access code: AB12CD"  "Your code is AAA-BBB-CCC"
 const RE_A3 = new RegExp(
-    `your\\s+(?:\\w+\\s+){0,2}(?:code|otp|pin|token)\\s+(?:is\\s*[:\\-]?\\s*|[:\\-]\\s*)${CODE_CAP}(?=[\\s,;.\\n]|$)`,
+    `your\\s+(?:\\w+\\s+){0,2}(?:code|otp|pin|token)\\s+(?:is\\s*[:\\-]?\\s*|[:\\-]\\s*)${CODE_CAP}(?!\\d)`,
     'i'
 );
 
