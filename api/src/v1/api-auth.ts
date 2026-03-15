@@ -1,4 +1,4 @@
-// v1/api-auth.ts
+// api/src/v1/api-auth.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Express middleware: resolve Bearer / query-param API key → req.apiUser
 //  Raw keys are NEVER stored in MongoDB. Only a SHA-256 hash is persisted.
@@ -9,8 +9,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
-import { db } from '../mongo';
-import { client as redis } from '../redis';
+import { db } from '../config/mongo';
+import { client as redis } from '../config/redis';
 import { API_PLANS, ApiPlanName, ApiPlanConfig } from './api-plans';
 import { resolveEffectivePlan } from './resolve-plan';
 

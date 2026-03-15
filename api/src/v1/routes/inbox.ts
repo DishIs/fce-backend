@@ -1,4 +1,4 @@
-// v1/routes/inbox.ts
+// api/src/v1/routes/inbox.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  All inbox operations for external API users.
 //
@@ -11,10 +11,10 @@
 //               GET    /v1/inboxes/:inbox/otp
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, Request, Response } from 'express';
-import { getInbox, getMessage, deleteMessageById } from '../../mailbox';
-import { db } from '../../mongo';
-import { client as redis } from '../../redis';
-import { getDomainEntry } from '../../domain-registry';            // ← from registry
+import { getInbox, getMessage, deleteMessageById } from '../../services/mailbox';
+import { db } from '../../config/mongo';
+import { client as redis } from '../../config/redis';
+import { getDomainEntry } from '../../services/domain-registry';            // ← from registry
 import {
   API_PLANS,
   ApiPlanName,

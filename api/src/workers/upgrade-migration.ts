@@ -1,4 +1,4 @@
-// api/src/upgrade-migration.ts
+// api/src/workers/upgrade-migration.ts
 // Called whenever a user is upgraded to 'pro'.
 // Mirrors exactly how the SMTP plugin (queue.redis.js) stores emails.
 //
@@ -9,8 +9,8 @@
 //  4. Deletes the old free/anonymous Redis keys for those inboxes
 //  5. Updates user_data_cache for every inbox so the SMTP plugin sees 'pro' immediately
 
-import { client } from './redis';
-import { db } from './mongo';
+import { client } from '../config/redis';
+import { db } from '../config/mongo';
 import { ObjectId } from 'mongodb';
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
-// /home/dit/maildrop/api/src/ratelimit.ts
+// api/src/services/ratelimit.ts
 
-import { client } from "./redis";
+import { client } from '../config/redis';
 
 const RATELIMIT: number = parseInt(process.env.RATELIMIT || "10");
 const LOCALHOSTS = ["127.0.0.1", "::1", "::ffff:127.0.0.1"];

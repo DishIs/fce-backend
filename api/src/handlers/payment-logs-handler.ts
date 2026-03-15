@@ -1,4 +1,4 @@
-// api/src/payment-logs-handler.ts
+// api/src/handlers/payment-logs-handler.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  GET /user/payment-logs/:wyiUserId
 //  Protected by internalApiAuth — called by the Next.js billing/dashboard page.
@@ -8,7 +8,7 @@
 //  has to touch the raw `details` blob.
 // ─────────────────────────────────────────────────────────────────────────────
 import { Request, Response } from 'express';
-import { db } from './mongo';
+import { db } from '../config/mongo';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

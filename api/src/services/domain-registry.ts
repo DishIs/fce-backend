@@ -1,4 +1,4 @@
-// domain-registry.ts
+// api/src/services/domain-registry.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Single source of truth for all domains served by freecustom.email.
 //

@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
-import { db, IUser } from './mongo'; 
-import { client } from './redis'; 
+import { db, IUser } from '../config/mongo'; 
+import { client } from '../config/redis'; 
 import { promises as dns, MxRecord } from 'dns'; 
 
 export async function getDashboardDataHandler(req: Request, res: Response) {

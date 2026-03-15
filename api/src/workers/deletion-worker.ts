@@ -1,4 +1,4 @@
-// api/src/deletion-worker.ts
+// api/src/workers/deletion-worker.ts
 //
 // Runs as a standalone Docker worker. After the 7-day cooldown, permanently
 // deletes user accounts: tombstone user doc, add email (7–14 days) and IP (24h)
@@ -9,8 +9,8 @@
 
 import { MongoClient, ObjectId } from 'mongodb';
 import dotenv from 'dotenv';
-import { sendEmail } from './email/resend';
-import { getDeletionPermanentEmailHtml } from './email/templates';
+import { sendEmail } from '../email/resend';
+import { getDeletionPermanentEmailHtml } from '../email/templates';
 
 dotenv.config();
 

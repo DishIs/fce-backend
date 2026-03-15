@@ -84,7 +84,7 @@ services:
       sh -c "
         echo 'Cleanup worker started';
         while true; do
-          node dist/cleanup-job.js;
+          node dist/workers/cleanup-job.js;
           echo 'Cleanup finished. Sleeping 24h...';
           sleep 86400;
         done
@@ -102,7 +102,7 @@ services:
     command: >
       sh -c "
         echo 'Domain verifier worker started';
-        node dist/domain-verifier.js;
+        node dist/workers/domain-verifier.js;
       "
     environment:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
@@ -128,7 +128,7 @@ services:
     command: >
       sh -c "
         echo 'Redis cleanup worker started';
-        node dist/redis-cleanup.js;
+        node dist/workers/redis-cleanup.js;
       "
     environment:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
@@ -142,7 +142,7 @@ services:
     build:
       context: ./api
     container_name: maildrop-deletion-worker
-    command: node dist/deletion-worker.js
+    command: node dist/workers/deletion-worker.js
     environment:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
       DELETION_WORKER_INTERVAL_MS: 3600000
@@ -159,7 +159,7 @@ services:
     command: >
       sh -c "
         echo 'Subscription expiry worker started';
-        node dist/subscription-expiry.js;
+        node dist/workers/subscription-expiry.js;
       "
     environment:
       MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin

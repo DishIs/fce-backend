@@ -1,6 +1,6 @@
-// api/src/feature-sync.ts
-import { API_PLANS, WS_PLANS } from './v1/api-plans';
-import { resolveEffectivePlan } from './v1/resolve-plan';
+// api/src/workers/feature-sync.ts
+import { API_PLANS, WS_PLANS } from '../v1/api-plans';
+import { resolveEffectivePlan } from '../v1/resolve-plan';
 
 /**
  * Synchronizes user feature limits (Webhooks, WebSockets) with their current plan.

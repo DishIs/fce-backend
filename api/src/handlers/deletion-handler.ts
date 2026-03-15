@@ -1,15 +1,15 @@
-// api/src/deletion-handler.ts
+// api/src/handlers/deletion-handler.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Account deletion: 7-day cooldown, immediate purge of sensitive data,
 //  then permanent delete by worker. Internal API only.
 // ─────────────────────────────────────────────────────────────────────────────
 import { Request, Response } from 'express';
 import { ObjectId } from 'mongodb';
-import { db, gfs, IUser, IDeletionCooldown } from './mongo';
-import { client as redis } from './redis';
-import { getUser } from './user';
-import { sendEmail } from './email/resend';
-import { getDeletionScheduledEmailHtml, getDeletionPermanentEmailHtml } from './email/templates';
+import { db, gfs, IUser, IDeletionCooldown } from '../config/mongo';
+import { client as redis } from '../config/redis';
+import { getUser } from '../services/user';
+import { sendEmail } from '../email/resend';
+import { getDeletionScheduledEmailHtml, getDeletionPermanentEmailHtml } from '../email/templates';
 
 const COOLDOWN_DAYS = 7;
 const IP_COOLDOWN_HOURS = 24;

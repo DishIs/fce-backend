@@ -1,4 +1,4 @@
-// v1/api-plans.ts
+// api/src/v1/api-plans.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Plan definitions for the public developer API
 //  Lives at:  api.freecustom.email/v1

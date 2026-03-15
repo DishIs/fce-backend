@@ -1,4 +1,4 @@
-// v1/ws-handler.ts
+// api/src/v1/ws-handler.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  WebSocket endpoint for the public developer API.
 //
@@ -15,8 +15,8 @@
 import WebSocket from 'ws';
 import { IncomingMessage } from 'http';
 import crypto from 'crypto';
-import { db } from '../mongo';
-import { client as redis } from '../redis';
+import { db } from '../config/mongo';
+import { client as redis } from '../config/redis';
 import { API_PLANS, ApiPlanName, WS_PLANS, OTP_PLANS, apiPlanToInternalPlan } from './api-plans';
 
 // ── In-memory connection registry ────────────────────────────────────────────

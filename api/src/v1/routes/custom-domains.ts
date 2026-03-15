@@ -1,4 +1,4 @@
-// v1/routes/custom-domains.ts
+// api/src/v1/routes/custom-domains.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Custom domain management for Growth / Enterprise API plan users.
 //
@@ -17,8 +17,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, Request, Response } from 'express';
 import crypto from 'crypto';
-import { db } from '../../mongo';
-import { client as redis } from '../../redis';
+import { db } from '../../config/mongo';
+import { client as redis } from '../../config/redis';
 import { CUSTOM_DOMAIN_PLANS } from '../api-plans';
 
 const router = Router();

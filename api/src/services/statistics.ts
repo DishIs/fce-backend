@@ -1,5 +1,5 @@
-// /home/dit/maildrop/api/src/statistics.ts
-import {client} from "./redis";
+// api/src/services/statistics.ts
+import {client} from '../config/redis';
 import ratelimit from "./ratelimit";
 
 

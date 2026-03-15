@@ -1,6 +1,6 @@
-// api/src/deletion-cooldown.ts — cooldown checks only (no dependency on user.ts)
-import { db } from './mongo';
-import type { IDeletionCooldown } from './mongo';
+// api/src/services/deletion-cooldown.ts — cooldown checks only (no dependency on user.ts)
+import { db } from '../config/mongo';
+import type { IDeletionCooldown } from '../config/mongo';
 
 export async function isEmailInDeletionCooldown(value: string): Promise<boolean> {
   const normalized = String(value).trim().toLowerCase();

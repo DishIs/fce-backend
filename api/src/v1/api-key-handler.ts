@@ -1,4 +1,4 @@
-// v1/api-key-handler.ts
+// api/src/v1/api-key-handler.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  CRUD handlers for API keys — called from authenticated user dashboard routes.
 //  These routes live on the INTERNAL server (protected by internalApiAuth).
@@ -10,9 +10,9 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Request, Response } from 'express';
 import crypto from 'crypto';
-import { db } from '../mongo';
-import { client as redis } from '../redis';
-import { getUser } from '../user';
+import { db } from '../config/mongo';
+import { client as redis } from '../config/redis';
+import { getUser } from '../services/user';
 import { ApiPlanName, API_PLANS } from './api-plans';
 
 // ── Generate ──────────────────────────────────────────────────────────────────

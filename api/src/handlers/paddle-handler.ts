@@ -1,18 +1,18 @@
-// api/src/paddle-handler.ts
+// api/src/handlers/paddle-handler.ts
 //
 //  FIX: Paddle sends lowercase/American-spelling statuses ("canceled", "active",
 //       "trialing"). Added normStatus() helper and applied it everywhere we write
 //       status to the DB, so stored values are always consistent ALLCAPS strings.
 //
 import { Request, Response } from 'express';
-import { db } from './mongo';
-import { ISubscription, IPaymentLog } from './mongo';
-import { migrateUserEmailsToPro } from './upgrade-migration';
-import { sendEmail } from './email/resend';
-import { getCancellationEmailHtml, getApiPlanCancellationEmailHtml } from './email/templates';
-import { ApiPlanName } from './v1/api-plans';
-import { syncUserFeatures } from './feature-sync';
-import { client as redis } from './redis';
+import { db } from '../config/mongo';
+import { ISubscription, IPaymentLog } from '../config/mongo';
+import { migrateUserEmailsToPro } from '../workers/upgrade-migration';
+import { sendEmail } from '../email/resend';
+import { getCancellationEmailHtml, getApiPlanCancellationEmailHtml } from '../email/templates';
+import { ApiPlanName } from '../v1/api-plans';
+import { syncUserFeatures } from '../workers/feature-sync';
+import { client as redis } from '../config/redis';
 
 
 type PaddleEventType =

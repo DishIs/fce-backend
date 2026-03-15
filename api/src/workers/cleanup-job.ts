@@ -1,4 +1,4 @@
-// api/src/cleanup-job.ts
+// api/src/workers/cleanup-job.ts
 // 
 // Run manually:   npx ts-node src/cleanup-job.ts
 // Or via cron:    0 3 * * * cd /path/to/api && npx ts-node src/cleanup-job.ts >> /var/log/email-cleanup.log 2>&1

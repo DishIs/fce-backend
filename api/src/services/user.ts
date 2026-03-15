@@ -1,6 +1,6 @@
-import { db } from './mongo';
-import { client as redisClient } from './redis';
-import { IUser, IUserSettings, ISubscription, IPaymentLog } from './mongo';
+import { db } from '../config/mongo';
+import { client as redisClient } from '../config/redis';
+import { IUser, IUserSettings, ISubscription, IPaymentLog } from '../config/mongo';
 import { v4 as uuidv4 } from 'uuid';
 import { Request, Response } from 'express';
 import { isEmailInDeletionCooldown, isIpInDeletionCooldown } from './deletion-cooldown';

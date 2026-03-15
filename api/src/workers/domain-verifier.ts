@@ -1,10 +1,10 @@
-// api/src/domain-verifier.ts  (nodemailer → Resend)
+// api/src/workers/domain-verifier.ts  (nodemailer → Resend)
 import { MongoClient, ObjectId } from 'mongodb';
 import { createClient }          from 'redis';
 import * as dns                  from 'dns/promises';
 import dotenv                    from 'dotenv';
-import { sendEmail }             from './email/resend';
-import { getDomainRevocationEmailHtml, getDomainWarningEmailHtml } from './email/templates';
+import { sendEmail } from '../email/resend';
+import { getDomainRevocationEmailHtml, getDomainWarningEmailHtml } from '../email/templates';
 dotenv.config();
 
 const MONGO_URI        = process.env.MONGO_URI  || 'mongodb://localhost:27017';

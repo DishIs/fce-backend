@@ -1,4 +1,4 @@
-// api/src/api-plan-change-handler.ts
+// api/src/handlers/api-plan-change-handler.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  POST /user/api-plan/change
 //  Upgrades or downgrades an existing Paddle API subscription in-place.
@@ -15,10 +15,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Request, Response } from 'express';
-import { db } from './mongo';
-import { API_PLANS, ApiPlanName } from './v1/api-plans';
-import { syncUserFeatures } from './feature-sync';
-import { client as redis } from './redis';
+import { db } from '../config/mongo';
+import { API_PLANS, ApiPlanName } from '../v1/api-plans';
+import { syncUserFeatures } from '../workers/feature-sync';
+import { client as redis } from '../config/redis';
 
 
 // ── Price-ID map from env ─────────────────────────────────────────────────────

@@ -1,4 +1,4 @@
-// api/src/subscription-expiry.ts
+// api/src/workers/subscription-expiry.ts
 //
 // Runs as a standalone Docker worker.
 // Handles TWO kinds of scheduled downgrades:
@@ -22,11 +22,11 @@ import { MongoClient, ObjectId } from 'mongodb';
 import { createClient } from 'redis';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { sendEmail } from './email/resend';
+import { sendEmail } from '../email/resend';
 import {
   getDowngradeCompleteEmailHtml,
   getApiPlanDowngradeEmailHtml,
-} from './email/templates';
+} from '../email/templates';
 import { syncUserFeatures } from './feature-sync';
 
 dotenv.config();

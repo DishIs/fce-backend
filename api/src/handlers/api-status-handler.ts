@@ -1,10 +1,10 @@
-// api/src/api-status-handler.ts
+// api/src/handlers/api-status-handler.ts
 // resolveEffectivePlan now imported from shared v1/resolve-plan.ts
 import { Request, Response } from 'express';
-import { db } from './mongo';
-import { client as redis } from './redis';
-import { API_PLANS, ApiPlanName, CREDIT_PACKAGES } from './v1/api-plans';
-import { resolveEffectivePlan } from './v1/resolve-plan';
+import { db } from '../config/mongo';
+import { client as redis } from '../config/redis';
+import { API_PLANS, ApiPlanName, CREDIT_PACKAGES } from '../v1/api-plans';
+import { resolveEffectivePlan } from '../v1/resolve-plan';
 
 function normStatus(raw?: string | null): string {
   if (!raw) return '';

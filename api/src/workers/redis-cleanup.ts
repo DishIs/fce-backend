@@ -1,4 +1,4 @@
-// api/src/redis-cleanup.ts
+// api/src/workers/redis-cleanup.ts
 //
 // Runs as a standalone Docker worker.
 // Periodically scans for stale / orphaned maildrop:* Redis keys and

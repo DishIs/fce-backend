@@ -1,4 +1,4 @@
-// server.ts  (updated — /domains/expiry added)
+// api/src/server.ts  (updated — /domains/expiry added)
 // ─────────────────────────────────────────────────────────────────────────────
 //  Changes from previous version:
 //    • domainsHandler now imported alongside domainExpiryHandler
@@ -7,11 +7,11 @@
 import express from 'express';
 import { createServer } from 'http';
 import WebSocket from 'ws';
-import { listHandler, messageHandler, deleteHandler } from './mailbox';
-import { getStats, statsHandler } from './statistics';
-import { subscriber } from './redis';
+import { listHandler, messageHandler, deleteHandler } from './services/mailbox';
+import { getStats, statsHandler } from './services/statistics';
+import { subscriber } from './config/redis';
 import dotenv from 'dotenv';
-import { connectToMongo } from './mongo';
+import { connectToMongo } from './config/mongo';
 import {
   addDomainHandler,
   getDomainsHandler,
@@ -25,11 +25,11 @@ import {
   getSettingsHandler,
   upgradeUserSubscriptionHandler,
   saveFcmTokenHandler,
-} from './user';
-import { deleteDomainHandler, getDashboardDataHandler, verifyDomainHandler } from './domain-handler';
-import { addInboxHandler } from './inbox-handler';
-import { domainsHandler, domainExpiryHandler } from './domains';   // ← updated import
-import { handlePaddleSubscriptionEvent } from './paddle-handler';
+} from './services/user';
+import { deleteDomainHandler, getDashboardDataHandler, verifyDomainHandler } from './handlers/domain-handler';
+import { addInboxHandler } from './handlers/inbox-handler';
+import { domainsHandler, domainExpiryHandler } from './services/domains';
+import { handlePaddleSubscriptionEvent } from './handlers/paddle-handler';
 
 import { createPublicV1Router } from './v1/router';
 import { handleApiWebSocket, notifyApiWsClients } from './v1/ws-handler';
@@ -42,18 +42,19 @@ import {
 } from './v1/api-key-handler';
 
 import jwt from 'jsonwebtoken';
-import { getApiStatusHandler } from './api-status-handler';
-import { getPaymentLogsHandler } from './payment-logs-handler';
-import { requestDeleteAccountHandler, restoreAccountHandler, getDeletionListHandler } from './deletion-handler';
-import { changeApiPlanHandler } from './api-plan-change-handler';
+import { getApiStatusHandler } from './handlers/api-status-handler';
+import { getPaymentLogsHandler } from './handlers/payment-logs-handler';
+import { requestDeleteAccountHandler, restoreAccountHandler, getDeletionListHandler } from './handlers/deletion-handler';
+import { changeApiPlanHandler } from './handlers/api-plan-change-handler';
 import {
   listApiCustomDomains,
   addApiCustomDomain,
   verifyApiCustomDomain,
   deleteApiCustomDomain,
-} from './api-custom-domains-handler';
+} from './handlers/api-custom-domains-handler';
 import cors from 'cors';
 import { notifyWebhooks } from './v1/routes/webhooks';
+import { deleteInboxNoteHandler, getInboxNotesHandler, upsertInboxNoteHandler } from './handlers/inbox-notes-handler';
 
 
 
@@ -81,8 +82,8 @@ connectToMongo().then(() => {
 
   app.use(cors({
     origin: '*',
-    methods:['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    exposedHeaders:[
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    exposedHeaders: [
       'X-API-Plan',
       'X-RateLimit-Limit-Second',
       'X-RateLimit-Remaining-Second',
@@ -135,6 +136,10 @@ connectToMongo().then(() => {
   app.post('/user/mute', muteSenderHandler);
   app.delete('/user/mute', unmuteSenderHandler);
   app.post('/user/inboxes', addInboxHandler);
+  app.get('/user/inbox-notes', getInboxNotesHandler);
+  app.post('/user/inbox-notes', upsertInboxNoteHandler);
+  app.delete('/user/inbox-notes', deleteInboxNoteHandler);
+
   app.post('/user/fcm-token', saveFcmTokenHandler);
   app.get('/user/api-custom-domains', listApiCustomDomains);
   app.post('/user/api-custom-domains', addApiCustomDomain);

@@ -1,4 +1,4 @@
-// v1/resolve-plan.ts
+// api/src/v1/resolve-plan.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Single source of truth for "what plan does this user actually have right now?"
 //  Used by both api-auth.ts (every API request) and api-status-handler.ts

@@ -1,4 +1,4 @@
-// v1/router.ts  (updated — /v1/custom-domains added)
+// api/src/v1/router.ts  (updated — /v1/custom-domains added)
 // ─────────────────────────────────────────────────────────────────────────────
 //  Public developer API router — mounted at /v1
 //  Domain: api.freecustom.email
@@ -9,7 +9,7 @@ import { apiRateLimit } from './api-ratelimit';
 import inboxRouter from './routes/inbox';
 import domainsRouter from './routes/domains';
 import customDomainsRouter from './routes/custom-domains';   // ← NEW
-import { db } from '../mongo';
+import { db } from '../config/mongo';
 import { API_PLANS, CREDIT_PACKAGES } from './api-plans';
 // router.ts — add this line with the other sub-routers
 import webhookRouter from './routes/webhooks';
@@ -69,7 +69,7 @@ v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {
 // ── GET /v1/usage ─────────────────────────────────────────────────────────────
 v1Router.get('/usage', async (req: Request, res: Response): Promise<any> => {
   const apiUser = req.apiUser!;
-  const { client: redis } = await import('../redis');
+  const { client: redis } = await import('../config/redis');
 
   const monthKey = `rl:m:${apiUser.userId}:${new Date().toISOString().slice(0, 7)}`;
   try {

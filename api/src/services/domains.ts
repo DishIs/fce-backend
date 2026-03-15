@@ -1,4 +1,4 @@
-// domains.ts
+// api/src/services/domains.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Internal /domains endpoint — served to the Next.js frontend.
 //
@@ -13,7 +13,7 @@
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import ratelimit from './ratelimit';
-import { client as redis } from './redis';
+import { client as redis } from '../config/redis';
 import {
   DOMAIN_REGISTRY,
   DomainTier,

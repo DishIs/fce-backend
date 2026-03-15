@@ -1,4 +1,4 @@
-// v1/api-ratelimit.ts
+// api/src/v1/api-ratelimit.ts
 // Two-layer rate limiter + quota warning emails.
 // Layers:
 //   1. Per-second  — sliding window (burst protection), scoped to userId
@@ -11,8 +11,8 @@
 // Rationale: quotas/rate-limits are a per-account concern. Using the key's
 // _id caused usage to reset every time a user rotated or created a new key.
 import { Request, Response, NextFunction } from 'express';
-import { client as redis } from '../redis';
-import { db } from '../mongo';
+import { client as redis } from '../config/redis';
+import { db } from '../config/mongo';
 import { sendEmail } from '../email/resend';
 import {
   getApiQuotaWarningEmailHtml,

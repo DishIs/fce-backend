@@ -130,6 +130,11 @@ export interface IUser {
   }[];
   mutedSenders: string[];
   inboxes?: string[];
+  inboxNotes?: Array<{
+    inbox: string;   // full address, e.g. "abc@ditube.info"
+    note:  string;   // plain-text note, already length-capped by the handler
+  }>;
+
   inboxHistory?: string[];
   hadTrial?: boolean
 

@@ -1,4 +1,4 @@
-// v1/routes/domains.ts
+// api/src/v1/routes/domains.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Public developer API — domain listing
 //
@@ -14,13 +14,13 @@
 //                within 5 min without a deploy.
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, Request, Response } from 'express';
-import { client as redis } from '../../redis';
+import { client as redis } from '../../config/redis';
 import {
   DOMAIN_REGISTRY,
   formatDomainForResponse,
   daysUntilExpiry,
   EXPIRY_WARN_DAYS,
-} from '../../domain-registry';
+} from '../../services/domain-registry';
 import { CUSTOM_DOMAIN_PLANS, ApiPlanName } from '../api-plans';
 
 const router = Router();

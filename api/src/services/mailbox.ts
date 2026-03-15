@@ -1,8 +1,8 @@
-// api/src/mailbox.ts
-import { client } from "./redis";
+// api/src/services/mailbox.ts
+import { client } from '../config/redis';
 import bigInt from "big-integer";
 import ratelimit from "./ratelimit";
-import { gfs, db } from './mongo';
+import { gfs, db } from '../config/mongo';
 import { Readable } from 'stream';
 import { ObjectId } from 'mongodb';
 import * as jwt from 'jsonwebtoken';

@@ -1,8 +1,8 @@
-// /api/src/inbox-handler.ts
+// api/src/handlers/inbox-handler.ts
 import { Request, Response } from 'express';
-import { db } from './mongo';
-import { client } from './redis';
-import { DOMAINS, FREE_DOMAINS, PRO_DOMAINS, getDomainEntry } from './domain-registry';
+import { db } from '../config/mongo';
+import { client } from '../config/redis';
+import { DOMAINS, FREE_DOMAINS, PRO_DOMAINS, getDomainEntry } from '../services/domain-registry';
 
 export async function addInboxHandler(req: Request, res: Response): Promise<any> {
   const { wyiUserId, inboxName, inbox } = req.body;

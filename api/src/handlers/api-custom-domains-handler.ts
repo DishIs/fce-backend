@@ -1,4 +1,4 @@
-// api-custom-domains-handler.ts
+// api/src/handlers/api-custom-domains-handler.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Internal Express routes for custom domain management.
 //  Accepts ?wyiUserId= + x-internal-api-key (enforced in server.ts).
@@ -14,9 +14,9 @@
 import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { promises as dns, MxRecord } from 'dns';
-import { db, IUser } from './mongo';
-import { client as redis } from './redis';
-import { CUSTOM_DOMAIN_PLANS, ApiPlanName } from './v1/api-plans';
+import { db, IUser } from '../config/mongo';
+import { client as redis } from '../config/redis';
+import { CUSTOM_DOMAIN_PLANS, ApiPlanName } from '../v1/api-plans';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Config

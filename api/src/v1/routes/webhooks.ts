@@ -1,4 +1,4 @@
-// v1/routes/webhooks.ts
+// api/src/v1/routes/webhooks.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Webhook subscription management for Make.com, Zapier, and any REST-hooks
 //  compatible platform.
@@ -13,7 +13,7 @@
 //  users from using Make/Zapier as a free polling workaround.
 // ─────────────────────────────────────────────────────────────────────────────
 import { Router, Request, Response } from 'express';
-import { db } from '../../mongo';
+import { db } from '../../config/mongo';
 import { ObjectId } from 'mongodb';
 import { WS_PLANS } from '../api-plans';
 
