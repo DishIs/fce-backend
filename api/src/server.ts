@@ -55,6 +55,7 @@ import {
 import cors from 'cors';
 import { notifyWebhooks } from './v1/routes/webhooks';
 import { deleteInboxNoteHandler, getInboxNotesHandler, upsertInboxNoteHandler } from './handlers/inbox-notes-handler';
+import { deleteInboxHandler } from './handlers/delete-inbox-handler';
 
 
 
@@ -136,6 +137,7 @@ connectToMongo().then(() => {
   app.post('/user/mute', muteSenderHandler);
   app.delete('/user/mute', unmuteSenderHandler);
   app.post('/user/inboxes', addInboxHandler);
+  app.delete('/user/inboxes', deleteInboxHandler);
   app.get('/user/inbox-notes', getInboxNotesHandler);
   app.post('/user/inbox-notes', upsertInboxNoteHandler);
   app.delete('/user/inbox-notes', deleteInboxNoteHandler);
