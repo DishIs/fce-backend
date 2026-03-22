@@ -88,7 +88,6 @@ connectToMongo().then(() => {
         const idempotencyKey = req.header('x-idempotency-key') as string;
         const secret = process.env.INTERNAL_API_SECRET || '';
 
-        // For internal requests, sign the FULL request context including query
         const pathAndQuery = req.originalUrl || req.url;
         const method = req.method;
 
@@ -104,7 +103,6 @@ connectToMongo().then(() => {
             if (cachedResponseStr) {
                 try {
                     const cachedResponse = JSON.parse(cachedResponseStr);
-                    // Ensure the payload matches the original request to prevent idempotency key theft for different payloads
                     const payloadHash = crypto.createHash('sha256').update(req.rawBody ? req.rawBody.toString('utf8') : '').digest('hex');
                     if (cachedResponse.payloadHash === payloadHash) {
                         return res.status(cachedResponse.status).json(cachedResponse.body);
@@ -116,7 +114,6 @@ connectToMongo().then(() => {
                 }
             }
             
-            // Intercept res.json to cache the response
             const originalJson = res.json;
             res.json = function (body) {
                 const payloadHash = crypto.createHash('sha256').update(req.rawBody ? req.rawBody.toString('utf8') : '').digest('hex');
@@ -125,19 +122,14 @@ connectToMongo().then(() => {
                     body,
                     payloadHash
                 });
-                // Cache for 24 hours
                 redis.set(idempKey, cacheData, { EX: 86400 }).catch(console.error);
                 return originalJson.call(this, body);
             };
         }
 
-        // Only trust plan if signature is valid. Here we can optionally re-derive or trust gateway.
-        // Given internalAPI signature check passed, we can safely read x-derived-plan if gateway set it,
-        // or fallback.
         const securePlan = req.header('x-derived-plan') || 'free';
-        req.headers['x-plan'] = securePlan; // Re-inject clean plan for downstream
+        req.headers['x-plan'] = securePlan;
         
-        // Attach identity context & progressive friction
         return next();
       }
       return res.status(401).json({ success: false, message: 'Unauthorized: Invalid or missing API key.' });
@@ -165,15 +157,11 @@ connectToMongo().then(() => {
     ],
   }));
 
-
   app.use((req, res, next) => {
-    const isWsUpgrade = req.headers.upgrade?.toLowerCase() === 'websocket';
     const isV1 = req.path.startsWith('/v1');
-    // /domains and /domains/expiry skip internal-key auth — they use JWT instead
     const isDomains = req.path === '/domains' || req.path.startsWith('/domains/');
-    if (isWsUpgrade || isV1 || isDomains) return next();
+    if (isV1 || isDomains) return next();
 
-    // Execute internalApiAuth middlewares sequentially
     let i = 0;
     const executeNext = (err?: any) => {
       if (err) return next(err);
@@ -187,7 +175,14 @@ connectToMongo().then(() => {
   });
 
   const server = createServer(app);
-  const wss = new WebSocket.Server({ server });
+
+  // ── WebSocket server in noServer mode ──────────────────────────────────────
+  // noServer: true means the ws library does NOT attach its own 'upgrade'
+  // listener. We manually route upgrades below so /v1/ws and the internal
+  // mailbox socket are handled separately — this is what prevents the
+  // "bad handshake" error on /v1/ws.
+  const wss = new WebSocket.Server({ noServer: true });
+
   const PORT = process.env.PORT || 3000;
 
   // ── Mailbox ────────────────────────────────────────────────────────────────
@@ -230,7 +225,6 @@ connectToMongo().then(() => {
   app.post('/user/api-custom-domains/:domain/verify', verifyApiCustomDomain);
   app.delete('/user/api-custom-domains/:domain', deleteApiCustomDomain);
 
-
   // ── Billing ────────────────────────────────────────────────────────────────
   app.post('/user/upgrade', upgradeUserSubscriptionHandler);
   app.post('/paddle/subscription-event', handlePaddleSubscriptionEvent);
@@ -246,7 +240,7 @@ connectToMongo().then(() => {
 
   // ── Public domain lists (JWT-gated, no internal key required) ─────────────
   app.get('/domains', domainsHandler);
-  app.get('/domains/expiry', domainExpiryHandler);   // ← NEW
+  app.get('/domains/expiry', domainExpiryHandler);
 
   app.get('/health', statsHandler);
   app.get('/user/api-status/:wyiUserId', getApiStatusHandler);
@@ -255,7 +249,7 @@ connectToMongo().then(() => {
   app.use('/v1/market', require('./v1/market-router').default);
   app.use('/v1', createPublicV1Router());
 
-  // ── WebSocket ──────────────────────────────────────────────────────────────
+  // ── In-memory mailbox client registry (internal WS) ───────────────────────
   const mailboxClients: Record<string, Set<WebSocket>> = {};
 
   async function sendStatsToAllStatsClients() {
@@ -272,26 +266,19 @@ connectToMongo().then(() => {
     }
   }
 
+  function notifyMailbox(mailbox: string, event: any) {
+    const clients = mailboxClients[mailbox];
+    if (!clients) return;
+    const message = JSON.stringify(event);
+    clients.forEach(ws => { if (ws.readyState === WebSocket.OPEN) ws.send(message); });
+  }
+
+  // ── Internal mailbox WS connection handler ─────────────────────────────────
+  // JWT validation is done in the upgrade handler below before we get here,
+  // so mailbox is guaranteed to be valid at this point.
   wss.on('connection', (ws: WebSocket, req) => {
     const urlParams = new URLSearchParams(req.url?.split('?')[1] ?? '');
-
-    if (req.url?.startsWith('/v1/ws')) {
-      handleApiWebSocket(ws, req);
-      return;
-    }
-
-    const mailbox = urlParams.get('mailbox');
-    const wsToken = urlParams.get('token');
-
-    if (!mailbox) { ws.close(1008, 'Missing mailbox'); return; }
-
-    try {
-      const decoded = jwt.verify(wsToken ?? '', process.env.JWT_SECRET!) as jwt.JwtPayload;
-      if (decoded.mailbox !== mailbox) { ws.close(1008, 'Token mailbox mismatch'); return; }
-    } catch {
-      ws.close(1008, 'Unauthorized');
-      return;
-    }
+    const mailbox = urlParams.get('mailbox')!; // validated in upgrade handler
 
     if (!mailboxClients[mailbox]) mailboxClients[mailbox] = new Set();
     mailboxClients[mailbox].add(ws);
@@ -303,13 +290,54 @@ connectToMongo().then(() => {
     });
   });
 
-  function notifyMailbox(mailbox: string, event: any) {
-    const clients = mailboxClients[mailbox];
-    if (!clients) return;
-    const message = JSON.stringify(event);
-    clients.forEach(ws => { if (ws.readyState === WebSocket.OPEN) ws.send(message); });
-  }
+  // ── HTTP Upgrade router ────────────────────────────────────────────────────
+  // This is the critical fix: we intercept ALL upgrade requests here and route
+  // them explicitly instead of letting the ws library grab everything blindly.
+  server.on('upgrade', (request, socket, head) => {
+    const url = request.url ?? '';
 
+    // ── Route 1: Public developer API WebSocket (/v1/ws) ──────────────────
+    if (url.startsWith('/v1/ws')) {
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        // handleApiWebSocket does its own auth (API key), plan gate, etc.
+        handleApiWebSocket(ws, request);
+      });
+      return;
+    }
+
+    // ── Route 2: Internal mailbox WebSocket (JWT-gated) ───────────────────
+    const urlParams = new URLSearchParams(url.split('?')[1] ?? '');
+    const mailbox   = urlParams.get('mailbox');
+    const wsToken   = urlParams.get('token');
+
+    if (!mailbox) {
+      socket.write('HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // Validate JWT before completing the handshake — reject here so the
+    // client sees a clean HTTP error rather than a post-connect close frame.
+    try {
+      const decoded = jwt.verify(wsToken ?? '', process.env.JWT_SECRET!) as jwt.JwtPayload;
+      if (decoded.mailbox !== mailbox) {
+        socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+    } catch {
+      socket.write('HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    // Handshake is valid — complete upgrade and emit 'connection'
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  });
+
+  // ── Redis pub/sub ──────────────────────────────────────────────────────────
   (async () => {
     await subscriber.pSubscribe('mailbox:events:*', (message, channel) => {
       try {

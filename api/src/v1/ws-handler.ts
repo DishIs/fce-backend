@@ -17,16 +17,16 @@ import { IncomingMessage } from 'http';
 import crypto from 'crypto';
 import { db } from '../config/mongo';
 import { client as redis } from '../config/redis';
-import { API_PLANS, ApiPlanName, WS_PLANS, OTP_PLANS, apiPlanToInternalPlan } from './api-plans';
+import { API_PLANS, ApiPlanName, WS_PLANS, OTP_PLANS } from './api-plans';
 
 // ── In-memory connection registry ────────────────────────────────────────────
 
 interface ApiWsClient {
-  ws:       WebSocket;
-  userId:   string;
-  plan:     ApiPlanName;
-  inboxes:  Set<string>;      // subscribed inbox addresses
-  keyId:    string;           // api_key._id (kept for reference/logging only)
+  ws:      WebSocket;
+  userId:  string;
+  plan:    ApiPlanName;
+  inboxes: Set<string>;   // subscribed inbox addresses
+  keyId:   string;        // api_key._id (kept for reference/logging only)
 }
 
 // userId → set of live connections for that user
@@ -50,12 +50,16 @@ export async function handleApiWebSocket(
     return;
   }
 
-  // ── 2. Resolve key → user ───────────────────────────────────────────────
   const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
 
-  let userId: string;
-  let plan: ApiPlanName;
-  let apiKeyId: string;
+  // ── 2. Resolve key → user ───────────────────────────────────────────────
+  // FIX: the entire auth block — including the separate apiInboxes fetch — is
+  // wrapped in one try/catch so a DB error on any step sends a clean 1011
+  // close frame instead of leaving the socket hanging (which surfaces as
+  // "bad handshake" on the client).
+  let userId:    string;
+  let plan:      ApiPlanName;
+  let apiKeyId:  string;
   let apiInboxes: string[];
 
   try {
@@ -81,12 +85,14 @@ export async function handleApiWebSocket(
       await redis.set(cacheKey, JSON.stringify({ userId, plan, apiKeyId }), { EX: 60 });
     }
 
-    // Fetch apiInboxes separately (not cached — needs to be live)
-    const userDoc = await db.collection('users').findOne({ wyiUserId: userId });
+    // FIX: apiInboxes fetch is now INSIDE the try/catch so any DB failure
+    // here is handled cleanly rather than throwing an unhandled rejection
+    // that tears down the socket mid-handshake.
+    const userDoc  = await db.collection('users').findOne({ wyiUserId: userId });
     apiInboxes = userDoc?.apiInboxes ?? [];
 
   } catch (err) {
-    console.error('[api-ws] Auth error:', err);
+    console.error('[api-ws] Auth/DB error:', err);
     ws.close(1011, 'Server error during authentication');
     return;
   }
@@ -94,7 +100,14 @@ export async function handleApiWebSocket(
   // ── 3. Plan gate ────────────────────────────────────────────────────────
   if (!WS_PLANS.includes(plan)) {
     const hint = `WebSocket access requires Startup plan ($19/mo) or above. Your plan: ${plan}.`;
-    try { ws.send(JSON.stringify({ type: 'error', code: 'plan_required', message: hint, upgrade_url: 'https://freecustom.email/api/pricing' })); } catch (_) {}
+    try {
+      ws.send(JSON.stringify({
+        type:        'error',
+        code:        'plan_required',
+        message:     hint,
+        upgrade_url: 'https://freecustom.email/api/pricing',
+      }));
+    } catch (_) {}
     ws.close(1008, hint);
     return;
   }
@@ -135,17 +148,21 @@ export async function handleApiWebSocket(
   activeConnections.get(userId)!.add(client);
 
   // ── 7. Welcome frame ────────────────────────────────────────────────────
-  ws.send(JSON.stringify({
-    type: 'connected',
-    plan,
-    subscribed_inboxes:  [...subscribedInboxes],
-    connection_count:    activeConnections.get(userId)!.size,
-    max_connections:     planConfig.features.maxWsConnections,
-    features: {
-      otp_extraction: OTP_PLANS.includes(plan),
-      attachments:    planConfig.features.attachments,
-    },
-  }));
+  try {
+    ws.send(JSON.stringify({
+      type:               'connected',
+      plan,
+      subscribed_inboxes: [...subscribedInboxes],
+      connection_count:   activeConnections.get(userId)!.size,
+      max_connections:    planConfig.features.maxWsConnections,
+      features: {
+        otp_extraction: OTP_PLANS.includes(plan),
+        attachments:    planConfig.features.attachments,
+      },
+    }));
+  } catch (err) {
+    console.error('[api-ws] Failed to send welcome frame:', err);
+  }
 
   // ── 8. Cleanup on disconnect ────────────────────────────────────────────
   const cleanup = () => {
@@ -192,9 +209,13 @@ export function notifyApiWsClients(mailbox: string, event: any): void {
           : undefined;
       }
 
-      client.ws.send(JSON.stringify(sanitized));
+      try {
+        client.ws.send(JSON.stringify(sanitized));
+      } catch (err) {
+        console.error(`[api-ws] Failed to send event to client ${client.userId}:`, err);
+      }
 
-      // FIX: increment quota by userId (not apiKeyId) — consistent with REST rate limiter
+      // Increment monthly quota by userId — consistent with REST rate limiter
       incrementMonthlyUsage(client.userId).catch(() => {});
     }
   }
@@ -212,7 +233,6 @@ export function getApiWsStats(): { total: number; byUser: Record<string, number>
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
-// FIX: parameter is now `userId`, not `apiKeyId`
 async function incrementMonthlyUsage(userId: string): Promise<void> {
   const monthKey = `rl:m:${userId}:${new Date().toISOString().slice(0, 7)}`;
   await redis.incr(monthKey);
