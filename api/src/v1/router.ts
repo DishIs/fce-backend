@@ -1,4 +1,4 @@
-// api/src/v1/router.ts  (updated — /v1/custom-domains added)
+// api/src/v1/router.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Public developer API router — mounted at /v1
 //  Domain: api.freecustom.email
@@ -8,10 +8,9 @@ import { apiKeyAuth } from './api-auth';
 import { apiRateLimit } from './api-ratelimit';
 import inboxRouter from './routes/inbox';
 import domainsRouter from './routes/domains';
-import customDomainsRouter from './routes/custom-domains';   // ← NEW
+import customDomainsRouter from './routes/custom-domains';
 import { db } from '../config/mongo';
 import { API_PLANS, CREDIT_PACKAGES } from './api-plans';
-// router.ts — add this line with the other sub-routers
 import webhookRouter from './routes/webhooks';
 
 const v1Router = Router();
@@ -20,32 +19,43 @@ const v1Router = Router();
 v1Router.use(apiKeyAuth);
 v1Router.use(apiRateLimit);
 
-// Integrate Identity & Abuse Engine for Public API
+// ── Abuse engine — REST requests only, never WebSocket upgrades ───────────────
+// WebSocket upgrade requests pass through Express middleware before the
+// 'upgrade' event fires. Running async Redis-backed middleware (friction engine)
+// during the upgrade causes the handshake to stall → "bad handshake" on client.
+// The WS handler (ws-handler.ts) does its own API-key auth independently.
 import { getFingerprint, recordFingerprintUsage, progressiveFrictionEngine } from '../middlewares/abuse-engine';
+
 v1Router.use((req, res, next) => {
+  // Skip ALL abuse-engine middleware for WebSocket upgrade requests
+  if (req.headers.upgrade?.toLowerCase() === 'websocket') return next();
+
   if (req.apiUser) {
     const fingerprint = getFingerprint(req);
     const ip = (req.ip || req.headers['x-forwarded-for'] || 'unknown-ip') as string;
-    const cookieId = 'api-key-user'; // We don't have cookies in v1 api, use stable identifier
+    const cookieId = 'api-key-user';
     req.userContext = {
       userId: req.apiUser.userId,
       fingerprint,
       ip,
-      plan: req.apiUser.plan
+      plan: req.apiUser.plan,
     };
-    // Record usage asynchronously
     recordFingerprintUsage(fingerprint, req.apiUser.userId, ip, cookieId).catch(() => {});
   }
   next();
 });
-v1Router.use(progressiveFrictionEngine);
+
+v1Router.use((req, res, next) => {
+  // Skip progressive friction for WebSocket upgrade requests
+  if (req.headers.upgrade?.toLowerCase() === 'websocket') return next();
+  return progressiveFrictionEngine(req, res, next);
+});
 
 // ── Sub-routers ───────────────────────────────────────────────────────────────
 v1Router.use('/inboxes', inboxRouter);
 v1Router.use('/domains', domainsRouter);
-v1Router.use('/custom-domains', customDomainsRouter);        // ← NEW
-
-v1Router.use('/webhooks', webhookRouter);  // ← auth + rate limit applied automatically
+v1Router.use('/custom-domains', customDomainsRouter);
+v1Router.use('/webhooks', webhookRouter);
 
 // ── GET /v1/me ────────────────────────────────────────────────────────────────
 v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {
@@ -55,29 +65,31 @@ v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {
       { wyiUserId: apiUser.userId },
       { projection: { wyiUserId: 1, email: 1, apiPlan: 1, apiCredits: 1, apiInboxes: 1, inboxes: 1, customDomains: 1 } },
     );
-    const appInboxesList  = Array.isArray(user?.inboxes)     ? user.inboxes.map((i: any) => String(i).toLowerCase())     : [];
-    const apiInboxesList  = user?.apiInboxes     ?? [];
-    const customDomains   = (user?.customDomains ?? []).map((d: any) => ({
-      domain:    d.domain,
-      verified:  !!d.verified,
-      mx_record: d.mxRecord,
+    const appInboxesList = Array.isArray(user?.inboxes)
+      ? user.inboxes.map((i: any) => String(i).toLowerCase())
+      : [];
+    const apiInboxesList = user?.apiInboxes ?? [];
+    const customDomains  = (user?.customDomains ?? []).map((d: any) => ({
+      domain:     d.domain,
+      verified:   !!d.verified,
+      mx_record:  d.mxRecord,
       txt_record: d.txtRecord,
     }));
 
     return res.json({
       success: true,
       data: {
-        plan:               apiUser.plan,
-        plan_label:         API_PLANS[apiUser.plan].label,
-        price:              `$${API_PLANS[apiUser.plan].price}/mo`,
-        credits:            user?.apiCredits ?? 0,
-        rate_limits:        apiUser.planConfig.rateLimit,
-        features:           apiUser.planConfig.features,
-        app_inboxes:        appInboxesList,
-        app_inbox_count:    appInboxesList.length,
-        api_inboxes:        apiInboxesList,
-        api_inbox_count:    apiInboxesList.length,
-        custom_domains:     customDomains,
+        plan:                apiUser.plan,
+        plan_label:          API_PLANS[apiUser.plan].label,
+        price:               `$${API_PLANS[apiUser.plan].price}/mo`,
+        credits:             user?.apiCredits ?? 0,
+        rate_limits:         apiUser.planConfig.rateLimit,
+        features:            apiUser.planConfig.features,
+        app_inboxes:         appInboxesList,
+        app_inbox_count:     appInboxesList.length,
+        api_inboxes:         apiInboxesList,
+        api_inbox_count:     apiInboxesList.length,
+        custom_domains:      customDomains,
         custom_domain_count: customDomains.length,
       },
     });
@@ -124,10 +136,10 @@ export function createPublicV1Router(): Router {
       success: true,
       data: {
         plans: Object.values(API_PLANS).map(p => ({
-          name:         p.name,
-          label:        p.label,
-          price:        p.price === 0 ? 'Free' : `$${p.price}/mo`,
-          rate_limit:   `${p.rateLimit.requestsPerSecond} req/s · ${p.rateLimit.requestsPerMonth.toLocaleString()} req/mo`,
+          name:       p.name,
+          label:      p.label,
+          price:      p.price === 0 ? 'Free' : `$${p.price}/mo`,
+          rate_limit: `${p.rateLimit.requestsPerSecond} req/s · ${p.rateLimit.requestsPerMonth.toLocaleString()} req/mo`,
           features: {
             otp_extraction:      p.features.otpExtraction,
             attachments:         p.features.attachments,
