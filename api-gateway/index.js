@@ -1,5 +1,6 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
+const { createServer } = require('http');
 const { createClient } = require('redis');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
@@ -15,17 +16,13 @@ redis.connect();
 
 // Pro and Free Backend Targets
 const FREE_CLUSTER = process.env.FREE_CLUSTER_URL || 'http://api-free:3000';
-const PRO_CLUSTER = process.env.PRO_CLUSTER_URL || 'http://api-pro:3000';
-const JWT_SECRET = process.env.JWT_SECRET;
+const PRO_CLUSTER  = process.env.PRO_CLUSTER_URL  || 'http://api-pro:3000';
+const JWT_SECRET   = process.env.JWT_SECRET;
 
+// ── Plan detection (unchanged) ─────────────────────────────────────────────
 async function determinePlan(req) {
-  // 3. Marketplace check
-  if (req.path.startsWith('/v1/market')) {
-    // Treat marketplace users as free cluster, unless we introduce paid marketplace plans
-    return 'free';
-  }
+  if (req.path.startsWith('/v1/market')) return 'free';
 
-  // 2. Check JWT Token (Frontend users)
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.substring(7);
@@ -35,21 +32,19 @@ async function determinePlan(req) {
         return decoded.plan === 'pro' ? 'pro' : 'free';
       }
     } catch (error) {
-      console.warn("JWT verification failed in gateway:", error.message);
+      console.warn('JWT verification failed in gateway:', error.message);
     }
   }
 
-  // 3. Check Developer API Key (for /v1 endpoints)
   let rawKey = null;
   if (req.query.api_key) {
     rawKey = req.query.api_key;
   } else if (authHeader && authHeader.startsWith('Bearer ') && !authHeader.includes('.')) {
-      // If it's a bearer token but not a JWT (doesn't contain dots), it might be an API key
-      rawKey = authHeader.substring(7).trim();
+    rawKey = authHeader.substring(7).trim();
   }
 
   if (rawKey) {
-    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+    const keyHash  = crypto.createHash('sha256').update(rawKey).digest('hex');
     const cacheKey = `api_key_cache:${keyHash}`;
     try {
       const cached = await redis.get(cacheKey);
@@ -62,20 +57,16 @@ async function determinePlan(req) {
     }
   }
 
-  // Default to free
   return 'free';
 }
 
+// ── HTTP middleware ────────────────────────────────────────────────────────
 app.use(async (req, res, next) => {
   try {
     const plan = await determinePlan(req);
     req.targetCluster = plan === 'pro' ? PRO_CLUSTER : FREE_CLUSTER;
-    
-    // Pass the securely derived plan down to the backend nodes
-    // Remove any user-supplied x-plan to prevent spoofing
     delete req.headers['x-plan'];
     req.headers['x-derived-plan'] = plan;
-    
     next();
   } catch (err) {
     req.targetCluster = FREE_CLUSTER;
@@ -86,28 +77,70 @@ app.use(async (req, res, next) => {
 });
 
 app.use((req, res, next) => {
-  // We only enforce internal API key check for specific internal endpoints
-  // if the frontend relies on x-internal-api-key for them.
-  // We do NOT want to block public API or public frontend endpoints.
-  const isInternalEndpoint = !req.path.startsWith('/v1') && !req.path.startsWith('/domains') && req.path !== '/health';
-  
+  const isInternalEndpoint =
+    !req.path.startsWith('/v1') &&
+    !req.path.startsWith('/domains') &&
+    req.path !== '/health';
+
   if (isInternalEndpoint && req.headers['x-internal-api-key']) {
-     if (req.headers['x-internal-api-key'] !== process.env.INTERNAL_API_KEY) {
-         return res.status(401).send('Unauthorized');
-     }
+    if (req.headers['x-internal-api-key'] !== process.env.INTERNAL_API_KEY) {
+      return res.status(401).send('Unauthorized');
+    }
   }
   next();
 });
 
-app.use('/', createProxyMiddleware({
-  router: function(req) {
-    return req.targetCluster;
-  },
+// ── Proxy middleware ───────────────────────────────────────────────────────
+// ws: true registers the upgrade handler on the underlying http.Server, but
+// ONLY when the middleware is attached to a server created via createServer()
+// and that server is used to listen — NOT app.listen() which creates its own
+// internal server that http-proxy-middleware never gets a reference to.
+const proxy = createProxyMiddleware({
+  router: (req) => req.targetCluster || FREE_CLUSTER,
   changeOrigin: true,
-  ws: true, // Enable WebSockets proxy
-}));
+  ws: true,
+  on: {
+    error: (err, req, res) => {
+      console.error('[gateway] proxy error:', err.message);
+      if (res && typeof res.writeHead === 'function' && !res.headersSent) {
+        res.writeHead(502);
+        res.end('Bad Gateway');
+      }
+    },
+  },
+});
 
-app.listen(port, () => {
+app.use('/', proxy);
+
+// ── Server — must use createServer() so ws:true can hook upgrade events ───
+// app.listen() creates an anonymous internal server that http-proxy-middleware
+// can never reach with its upgrade listener, silently breaking WebSockets.
+const server = createServer(app);
+
+// ── Explicit WebSocket upgrade handler ────────────────────────────────────
+// http-proxy-middleware's ws:true attaches its own 'upgrade' listener when
+// you call proxy.upgrade — we wire that up here so WS upgrades are actually
+// forwarded instead of being dropped.
+server.on('upgrade', async (req, socket, head) => {
+  // Determine target cluster for this WS connection using the same plan logic.
+  // We can't use Express middleware here (upgrade events bypass it), so we
+  // call determinePlan directly.
+  let target = FREE_CLUSTER;
+  try {
+    const plan = await determinePlan(req);
+    target = plan === 'pro' ? PRO_CLUSTER : FREE_CLUSTER;
+    // Inject derived-plan header so the backend node can read it
+    req.headers['x-derived-plan'] = plan;
+    delete req.headers['x-plan'];
+  } catch (e) {
+    console.error('[gateway] upgrade plan detection error:', e.message);
+  }
+
+  // Use http-proxy-middleware's upgrade handler with the resolved target
+  proxy.upgrade(req, socket, head, { target });
+});
+
+server.listen(port, () => {
   console.log(`API Gateway listening on port ${port}`);
   console.log(`Routing to: FREE (${FREE_CLUSTER}) | PRO (${PRO_CLUSTER})`);
 });
