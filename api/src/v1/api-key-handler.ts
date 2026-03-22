@@ -159,6 +159,19 @@ export async function setApiPlanHandler(req: Request, res: Response): Promise<an
       { $set: updateFields },
     );
 
+    // --- CACHE BUSTING ---
+    // Find all active API keys for this user and remove them from Redis cache
+    // so the plan change is reflected immediately.
+    try {
+      const keys = await db.collection('api_keys').find({ wyiUserId, active: true }).toArray();
+      const { client: redis } = await import('../config/redis');
+      for (const k of keys) {
+        await redis.del(`api_key_cache:${k.keyHash}`);
+      }
+    } catch (cacheErr) {
+      console.error('[setApiPlan] Failed to bust API key cache:', cacheErr);
+    }
+
     if (result.matchedCount === 0) {
       return res.status(404).json({ success: false, message: 'User not found.' });
     }

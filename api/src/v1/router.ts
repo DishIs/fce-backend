@@ -20,6 +20,26 @@ const v1Router = Router();
 v1Router.use(apiKeyAuth);
 v1Router.use(apiRateLimit);
 
+// Integrate Identity & Abuse Engine for Public API
+import { getFingerprint, recordFingerprintUsage, progressiveFrictionEngine } from '../middlewares/abuse-engine';
+v1Router.use((req, res, next) => {
+  if (req.apiUser) {
+    const fingerprint = getFingerprint(req);
+    const ip = (req.ip || req.headers['x-forwarded-for'] || 'unknown-ip') as string;
+    const cookieId = 'api-key-user'; // We don't have cookies in v1 api, use stable identifier
+    req.userContext = {
+      userId: req.apiUser.userId,
+      fingerprint,
+      ip,
+      plan: req.apiUser.plan
+    };
+    // Record usage asynchronously
+    recordFingerprintUsage(fingerprint, req.apiUser.userId, ip, cookieId).catch(() => {});
+  }
+  next();
+});
+v1Router.use(progressiveFrictionEngine);
+
 // ── Sub-routers ───────────────────────────────────────────────────────────────
 v1Router.use('/inboxes', inboxRouter);
 v1Router.use('/domains', domainsRouter);

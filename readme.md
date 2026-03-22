@@ -29,7 +29,21 @@ This project is the backend component of the FreeCustom.Email service. The front
 *   **Custom SMTP Server:** A highly customized Haraka SMTP server for high-performance email processing.
 *   **Microservices Architecture:** A collection of services for different tasks, including a REST API, background workers, and more.
 *   **Real-time Updates:** WebSocket integration for real-time updates to the frontend.
+*   **Enterprise-Grade Security:**
+    *   **HMAC Signing**: All internal API calls are cryptographically signed to prevent unauthorized access.
+    *   **Abuse Engine**: Real-time fingerprinting and behavioral analysis to stop bot farms and multi-account abuse.
+    *   **Traffic Lanes**: Segregated routing for Public, Internal, and Marketplace traffic via a dedicated API Gateway.
+    *   **Progressive Friction**: Randomized logarithmic delays instead of blunt blocks to degrade abuser economics while protecting legitimate users.
 *   **Secure and Scalable:** Designed with security and scalability in mind, using technologies like MongoDB, Redis, and Docker.
+
+## Advanced Security Architecture
+
+The Maildrop backend utilizes a multi-layered security stack:
+
+1.  **API Gateway**: A dedicated entry point that derived plans and routes traffic to isolated clusters (`free` vs `pro`).
+2.  **Identity Layer**: Uses stable factors (Cookie ID + IP Prefix + UA) to create a unique device fingerprint.
+3.  **Trust Layer**: Internal service-to-service communication is validated using HMAC-SHA256 signatures with nonce-based replay protection.
+4.  **Economic Defense**: Non-linear progressive friction injects artificial latency for high-volume free-tier users, making mass abuse cost-prohibitive.
 
 ## Getting Started
 

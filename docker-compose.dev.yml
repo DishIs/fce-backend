@@ -1,0 +1,78 @@
+# This file is used to run the API Gateway in a local development environment.
+# It is not intended for production use.
+
+# Docker Compose override file
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: ./api-gateway
+    container_name: maildrop-api
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - FREE_CLUSTER_URL=http://api-free:3000
+      - PRO_CLUSTER_URL=http://api-pro:3000
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    depends_on:
+      - api-free
+      - api-pro
+
+  api-free:
+    build:
+      context: ./api
+    container_name: maildrop-api-free
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MONGO_URI=mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - APP_URL=https://www.freecustom.email
+      - PADDLE_PRICE_DEVELOPER=${PADDLE_PRICE_DEVELOPER}
+      - PADDLE_PRICE_STARTUP=${PADDLE_PRICE_STARTUP}
+      - PADDLE_PRICE_GROWTH=${PADDLE_PRICE_GROWTH}
+      - PADDLE_PRICE_ENTERPRISE=${PADDLE_PRICE_ENTERPRISE}
+      - PADDLE_ENV=production
+      - PADDLE_API_KEY=${PADDLE_API_KEY}
+    expose:
+      - "3000"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+    restart: unless-stopped
+
+  api-pro:
+    build:
+      context: ./api
+    container_name: maildrop-api-pro
+    environment:
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - MONGO_URI=mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
+      - INTERNAL_API_KEY=${INTERNAL_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - APP_URL=https://www.freecustom.email
+      - PADDLE_PRICE_DEVELOPER=${PADDLE_PRICE_DEVELOPER}
+      - PADDLE_PRICE_STARTUP=${PADDLE_PRICE_STARTUP}
+      - PADDLE_PRICE_GROWTH=${PADDLE_PRICE_GROWTH}
+      - PADDLE_PRICE_ENTERPRISE=${PADDLE_PRICE_ENTERPRISE}
+      - PADDLE_ENV=production
+      - PADDLE_API_KEY=${PADDLE_API_KEY}
+    expose:
+      - "3000"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 2G
+    restart: unless-stopped

@@ -1,9 +1,3 @@
-// api/src/server.ts  (updated — /domains/expiry added)
-// ─────────────────────────────────────────────────────────────────────────────
-//  Changes from previous version:
-//    • domainsHandler now imported alongside domainExpiryHandler
-//    • GET /domains/expiry added (authenticated, returns full expiry table)
-// ─────────────────────────────────────────────────────────────────────────────
 import express from 'express';
 import { createServer } from 'http';
 import WebSocket from 'ws';
@@ -12,6 +6,8 @@ import { getStats, statsHandler } from './services/statistics';
 import { subscriber } from './config/redis';
 import dotenv from 'dotenv';
 import { connectToMongo } from './config/mongo';
+import { client as redis } from './config/redis';
+import crypto from 'crypto';
 import {
   addDomainHandler,
   getDomainsHandler,
@@ -56,30 +52,105 @@ import cors from 'cors';
 import { notifyWebhooks } from './v1/routes/webhooks';
 import { deleteInboxNoteHandler, getInboxNotesHandler, upsertInboxNoteHandler } from './handlers/inbox-notes-handler';
 import { deleteInboxHandler } from './handlers/delete-inbox-handler';
+import { attachIdentityContext, progressiveFrictionEngine } from './middlewares/abuse-engine';
+import { verifySignature } from './utils/crypto';
 
-
+declare global {
+  namespace Express {
+    interface Request {
+      rawBody?: Buffer;
+    }
+  }
+}
 
 dotenv.config();
 
 connectToMongo().then(() => {
   const app = express();
+  app.set('trust proxy', true);
   const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY;
 
   if (!INTERNAL_API_KEY) {
     throw new Error('FATAL: INTERNAL_API_KEY is not set. The service cannot run securely.');
   }
 
-  const internalApiAuth = (
-    req: express.Request,
-    res: express.Response,
-    next: express.NextFunction,
-  ) => {
-    const providedKey = req.header('x-internal-api-key');
-    if (providedKey && providedKey === INTERNAL_API_KEY) return next();
-    return res.status(401).json({ success: false, message: 'Unauthorized: Invalid or missing API key.' });
-  };
+  const internalApiAuth = [
+    async (
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction,
+    ) => {
+      const providedKey = req.header('x-internal-api-key');
+      if (providedKey && providedKey === INTERNAL_API_KEY) {
+        const signature = req.header('x-signature') as string;
+        const timestamp = req.header('x-timestamp') as string;
+        const nonce = req.header('x-nonce') as string;
+        const idempotencyKey = req.header('x-idempotency-key') as string;
+        const secret = process.env.INTERNAL_API_SECRET || '';
 
-  app.use(express.json());
+        // For internal requests, sign the FULL request context including query
+        const pathAndQuery = req.originalUrl || req.url;
+        const method = req.method;
+
+        if (!await verifySignature(signature, timestamp, method, pathAndQuery, req.rawBody, secret, nonce)) {
+            return res.status(403).json({ success: false, message: 'Forbidden: Invalid signature.' });
+        }
+        
+        // Handle Idempotency (safe retries)
+        if (idempotencyKey) {
+            const idempKey = `idempotency:${idempotencyKey}`;
+            const cachedResponseStr = await redis.get(idempKey);
+            
+            if (cachedResponseStr) {
+                try {
+                    const cachedResponse = JSON.parse(cachedResponseStr);
+                    // Ensure the payload matches the original request to prevent idempotency key theft for different payloads
+                    const payloadHash = crypto.createHash('sha256').update(req.rawBody ? req.rawBody.toString('utf8') : '').digest('hex');
+                    if (cachedResponse.payloadHash === payloadHash) {
+                        return res.status(cachedResponse.status).json(cachedResponse.body);
+                    } else {
+                        return res.status(400).json({ success: false, message: 'Idempotency key reused with different payload.' });
+                    }
+                } catch (e) {
+                    console.error("Failed to parse cached idempotency response", e);
+                }
+            }
+            
+            // Intercept res.json to cache the response
+            const originalJson = res.json;
+            res.json = function (body) {
+                const payloadHash = crypto.createHash('sha256').update(req.rawBody ? req.rawBody.toString('utf8') : '').digest('hex');
+                const cacheData = JSON.stringify({
+                    status: res.statusCode,
+                    body,
+                    payloadHash
+                });
+                // Cache for 24 hours
+                redis.set(idempKey, cacheData, { EX: 86400 }).catch(console.error);
+                return originalJson.call(this, body);
+            };
+        }
+
+        // Only trust plan if signature is valid. Here we can optionally re-derive or trust gateway.
+        // Given internalAPI signature check passed, we can safely read x-derived-plan if gateway set it,
+        // or fallback.
+        const securePlan = req.header('x-derived-plan') || 'free';
+        req.headers['x-plan'] = securePlan; // Re-inject clean plan for downstream
+        
+        // Attach identity context & progressive friction
+        return next();
+      }
+      return res.status(401).json({ success: false, message: 'Unauthorized: Invalid or missing API key.' });
+    },
+    attachIdentityContext,
+    progressiveFrictionEngine
+  ];
+
+  app.use(express.json({
+    verify: (req: express.Request, res, buf) => {
+      req.rawBody = buf;
+    }
+  }));
 
   app.use(cors({
     origin: '*',
@@ -101,7 +172,18 @@ connectToMongo().then(() => {
     // /domains and /domains/expiry skip internal-key auth — they use JWT instead
     const isDomains = req.path === '/domains' || req.path.startsWith('/domains/');
     if (isWsUpgrade || isV1 || isDomains) return next();
-    return internalApiAuth(req, res, next);
+
+    // Execute internalApiAuth middlewares sequentially
+    let i = 0;
+    const executeNext = (err?: any) => {
+      if (err) return next(err);
+      if (i < internalApiAuth.length) {
+        (internalApiAuth[i++] as express.RequestHandler)(req, res, executeNext);
+      } else {
+        next();
+      }
+    };
+    executeNext();
   });
 
   const server = createServer(app);
@@ -170,6 +252,7 @@ connectToMongo().then(() => {
   app.get('/user/api-status/:wyiUserId', getApiStatusHandler);
 
   // ── Public Developer API ───────────────────────────────────────────────────
+  app.use('/v1/market', require('./v1/market-router').default);
   app.use('/v1', createPublicV1Router());
 
   // ── WebSocket ──────────────────────────────────────────────────────────────
