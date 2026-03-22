@@ -64,6 +64,7 @@ services:
       FREE_CLUSTER_URL: http://api-free:3000
       PRO_CLUSTER_URL: http://api-pro:3000
       PORT: 3000
+      JWT_SECRET: ${JWT_SECRET}
     expose:
       - "3000"
     restart: unless-stopped
