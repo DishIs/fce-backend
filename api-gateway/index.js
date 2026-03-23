@@ -26,12 +26,42 @@ if (!JWT_SECRET) {
 // ── Rate limit config ──────────────────────────────────────────────────────
 // Two sliding windows per request: per-second (burst) + per-minute (sustained).
 // nginx is the outermost layer and handles raw floods before we get here.
-// This layer adds plan-awareness: pro users get 5× the limits.
-const RATE_LIMITS = {
+// This layer adds plan-awareness: pro users get 5× the public API limits.
+//
+// TWO separate limit buckets:
+//
+//   PUBLIC_RATE_LIMITS  — /v1/*, /mailbox/*, /domains/*
+//     Real API traffic. Tight per-second limits to prevent scraping/abuse.
+//     These are the limits API users buy plans for.
+//
+//   MGMT_RATE_LIMITS    — /user/*, /auth/*, /paddle/*
+//     Internal dashboard management calls (api-status, api-keys, payment-logs,
+//     settings, inboxes, etc.). These are server-to-server calls signed with
+//     the internal API key — NOT public API traffic. Should never be tight.
+//     A dashboard page load fires 3 simultaneous requests; we need headroom.
+//
+const PUBLIC_RATE_LIMITS = {
   anonymous: { perSecond: 2,  perMinute: 30  },
   free:      { perSecond: 4,  perMinute: 80  },
   pro:       { perSecond: 20, perMinute: 400 },
 };
+
+const MGMT_RATE_LIMITS = {
+  anonymous: { perSecond: 10, perMinute: 120 },
+  free:      { perSecond: 20, perMinute: 300 },
+  pro:       { perSecond: 50, perMinute: 600 },
+};
+
+// Paths routed to PUBLIC_RATE_LIMITS — everything else uses MGMT_RATE_LIMITS
+function isPublicApiPath(path) {
+  return (
+    path.startsWith('/v1/') ||
+    path === '/v1' ||
+    path.startsWith('/mailbox/') ||
+    path.startsWith('/domains') ||
+    path === '/domains'
+  );
+}
 
 // ── Plan detection ─────────────────────────────────────────────────────────
 // Called from both Express middleware AND raw 'upgrade' event handlers.
@@ -102,8 +132,8 @@ function getRealIp(req) {
 // Each request adds one entry; entries older than the window are evicted first.
 // Two windows checked per request: 1s (burst) and 1m (sustained).
 // Returns { blocked, retryAfter, limit, window } or { blocked: false }.
-async function checkRateLimit(ip, plan) {
-  const limits = RATE_LIMITS[plan] || RATE_LIMITS.anonymous;
+async function checkRateLimit(ip, plan, limits) {
+  const planLimits = limits[plan] || limits.anonymous;
   const now    = Date.now();
 
   // Mask to /24 — consistent with abuse-engine.ts
@@ -114,9 +144,12 @@ async function checkRateLimit(ip, plan) {
     ipKey = ip.split(':').slice(0, 3).join(':') + '::';
   }
 
+  // bucket suffix keeps public API counters separate from mgmt counters
+  // so a burst of dashboard calls never eats into the public API quota
+  const bucket = limits === PUBLIC_RATE_LIMITS ? 'pub' : 'mgmt';
   const windows = [
-    { key: `rl:gw:${plan}:${ipKey}:1s`, windowMs: 1_000,  limit: limits.perSecond },
-    { key: `rl:gw:${plan}:${ipKey}:1m`, windowMs: 60_000, limit: limits.perMinute },
+    { key: `rl:gw:${bucket}:${plan}:${ipKey}:1s`, windowMs: 1_000,  limit: planLimits.perSecond },
+    { key: `rl:gw:${bucket}:${plan}:${ipKey}:1m`, windowMs: 60_000, limit: planLimits.perMinute },
   ];
 
   for (const { key, windowMs, limit } of windows) {
@@ -175,7 +208,10 @@ app.use(async (req, res, next) => {
 
   const plan   = req.detectedPlan || 'anonymous';
   const ip     = getRealIp(req);
-  const result = await checkRateLimit(ip, plan);
+
+  // Use tight limits for public API paths, generous limits for internal mgmt
+  const limitSet = isPublicApiPath(path) ? PUBLIC_RATE_LIMITS : MGMT_RATE_LIMITS;
+  const result   = await checkRateLimit(ip, plan, limitSet);
 
   if (result.blocked) {
     res.set({
@@ -262,5 +298,6 @@ server.on('upgrade', (req, socket, head) => {
 server.listen(port, () => {
   console.log(`API Gateway listening on port ${port}`);
   console.log(`FREE → ${FREE_CLUSTER} | PRO → ${PRO_CLUSTER}`);
-  console.log(`Rate limits: anon=${JSON.stringify(RATE_LIMITS.anonymous)} free=${JSON.stringify(RATE_LIMITS.free)} pro=${JSON.stringify(RATE_LIMITS.pro)}`);
+  console.log(`Public API limits:  anon=${JSON.stringify(PUBLIC_RATE_LIMITS.anonymous)} free=${JSON.stringify(PUBLIC_RATE_LIMITS.free)} pro=${JSON.stringify(PUBLIC_RATE_LIMITS.pro)}`);
+  console.log(`Mgmt limits:        anon=${JSON.stringify(MGMT_RATE_LIMITS.anonymous)} free=${JSON.stringify(MGMT_RATE_LIMITS.free)} pro=${JSON.stringify(MGMT_RATE_LIMITS.pro)}`);
 });
