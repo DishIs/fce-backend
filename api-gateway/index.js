@@ -23,34 +23,15 @@ if (!JWT_SECRET) {
   console.log('[gateway] JWT_SECRET: set ✓');
 }
 
-// ── Rate limit config per plan ─────────────────────────────────────────────
-//
-// Two windows enforced simultaneously:
-//   1. Per-second  — burst protection  (sliding window in Redis)
-//   2. Per-minute  — sustained rate    (sliding window in Redis)
-//
-// Anonymous users get the tightest limits since they're unauthenticated and
-// share infrastructure with everyone else.
-//
-// Pro users get 10x the per-second and per-minute limits. In practice a human
-// user never comes close — these only kick in if someone is scripting.
-//
-// The /v1/* developer API has its own monthly quota system in the abuse engine;
-// these gateway limits are the first line of defence before traffic even hits
-// the app layer.
-//
-// Paths that bypass rate limiting entirely:
-//   - /health  — load balancer probes
-//   - WebSocket upgrades — long-lived connections, not request-based
-//
+// ── Rate limit config ──────────────────────────────────────────────────────
+// Two sliding windows per request: per-second (burst) + per-minute (sustained).
+// nginx is the outermost layer and handles raw floods before we get here.
+// This layer adds plan-awareness: pro users get 5× the limits.
 const RATE_LIMITS = {
   anonymous: { perSecond: 2,  perMinute: 30  },
   free:      { perSecond: 4,  perMinute: 80  },
   pro:       { perSecond: 20, perMinute: 400 },
 };
-
-// Paths that are exempt from rate limiting (internal tools, health checks)
-const RATE_LIMIT_BYPASS_PATHS = new Set(['/health']);
 
 // ── Plan detection ─────────────────────────────────────────────────────────
 // Called from both Express middleware AND raw 'upgrade' event handlers.
@@ -104,28 +85,28 @@ async function determinePlan(req) {
   return 'anonymous';
 }
 
-// ── Sliding window rate limiter ────────────────────────────────────────────
-//
-// Uses a Redis sorted set where each member is `${timestamp}-${random}`
-// and the score is the timestamp in ms. On every request:
-//   1. Remove members older than the window
-//   2. Count remaining members
-//   3. If count >= limit → reject with 429
-//   4. Otherwise add current request and set TTL
-//
-// This is an exact sliding window — more accurate than the token bucket or
-// fixed window approaches, with minimal Redis overhead (2 round-trips via
-// pipeline).
-//
-// Key format: rl:gw:{plan}:{ip}:{window}
-// e.g.        rl:gw:free:1.2.3.0:1s
-//
+// ── Real IP (mirrors abuse-engine.ts priority order) ─────────────────────
+function getRealIp(req) {
+  const h = (req && req.headers) || {};
+  const cf = h['cf-connecting-ip'];
+  if (cf && typeof cf === 'string') return cf.trim();
+  const xff = h['x-forwarded-for'];
+  if (xff) {
+    const first = (typeof xff === 'string' ? xff : xff[0]).split(',')[0].trim();
+    if (first) return first;
+  }
+  return (req && req.ip) || 'unknown';
+}
+
+// ── Sliding window rate limiter (Redis sorted set) ─────────────────────────
+// Each request adds one entry; entries older than the window are evicted first.
+// Two windows checked per request: 1s (burst) and 1m (sustained).
+// Returns { blocked, retryAfter, limit, window } or { blocked: false }.
 async function checkRateLimit(ip, plan) {
   const limits = RATE_LIMITS[plan] || RATE_LIMITS.anonymous;
   const now    = Date.now();
 
-  // Mask IP to /24 subnet — same as abuse engine — to handle proxies
-  // that cycle through a small pool of IPs within the same /24.
+  // Mask to /24 — consistent with abuse-engine.ts
   let ipKey = ip || 'unknown';
   if (ip && ip.includes('.')) {
     ipKey = ip.split('.').slice(0, 3).join('.') + '.0';
@@ -134,124 +115,91 @@ async function checkRateLimit(ip, plan) {
   }
 
   const windows = [
-    { key: `rl:gw:${plan}:${ipKey}:1s`,  windowMs: 1_000,  limit: limits.perSecond },
-    { key: `rl:gw:${plan}:${ipKey}:1m`,  windowMs: 60_000, limit: limits.perMinute },
+    { key: `rl:gw:${plan}:${ipKey}:1s`, windowMs: 1_000,  limit: limits.perSecond },
+    { key: `rl:gw:${plan}:${ipKey}:1m`, windowMs: 60_000, limit: limits.perMinute },
   ];
 
   for (const { key, windowMs, limit } of windows) {
-    const cutoff  = now - windowMs;
-    const member  = `${now}-${Math.random().toString(36).slice(2)}`;
-
+    const cutoff = now - windowMs;
+    const member = `${now}-${Math.random().toString(36).slice(2)}`;
     try {
       const pipeline = redis.multi();
-      pipeline.zRemRangeByScore(key, '-inf', cutoff);  // evict expired entries
-      pipeline.zCard(key);                              // count current window
+      pipeline.zRemRangeByScore(key, '-inf', cutoff);
+      pipeline.zCard(key);
       pipeline.zAdd(key, { score: now, value: member });
       pipeline.expire(key, Math.ceil(windowMs / 1000) + 1);
       const results = await pipeline.exec();
-
-      // results[1] is the count BEFORE we added the new member
-      const count = results[1];
+      const count = results[1]; // count BEFORE adding current request
       if (count >= limit) {
-        // Return which window was hit so we can set the right Retry-After
-        return {
-          blocked: true,
-          retryAfter: Math.ceil(windowMs / 1000),
-          limit,
-          window: windowMs === 1_000 ? '1s' : '1m',
-        };
+        return { blocked: true, retryAfter: Math.ceil(windowMs / 1000), limit, window: windowMs === 1_000 ? '1s' : '1m' };
       }
     } catch (err) {
-      // Redis failure → fail open (don't block legitimate traffic)
+      // Redis error → fail open, never block legitimate traffic
       console.error('[gateway] rate limit Redis error:', err.message);
       return { blocked: false };
     }
   }
-
   return { blocked: false };
-}
-
-// ── Real IP extraction ─────────────────────────────────────────────────────
-// Mirrors the same priority order as abuse-engine.ts so rate limit keys
-// are consistent with abuse engine fingerprints.
-function getRealIp(req) {
-  const headers = (req && req.headers) || {};
-
-  const cfIp = headers['cf-connecting-ip'];
-  if (cfIp && typeof cfIp === 'string') return cfIp.trim();
-
-  const xff = headers['x-forwarded-for'];
-  if (xff) {
-    const first = (typeof xff === 'string' ? xff : xff[0]).split(',')[0].trim();
-    if (first) return first;
-  }
-
-  return (req && req.ip) || 'unknown';
 }
 
 // ── HTTP middleware ────────────────────────────────────────────────────────
 
-// Step 1: Plan detection — runs first, sets x-derived-plan for downstream
+// Step 1: Plan detection
 app.use(async (req, res, next) => {
   try {
     const plan = await determinePlan(req);
-    req.detectedPlan   = plan;
-    req.targetCluster  = plan === 'pro' ? PRO_CLUSTER : FREE_CLUSTER;
+    req.detectedPlan  = plan;
+    req.targetCluster = plan === 'pro' ? PRO_CLUSTER : FREE_CLUSTER;
     delete req.headers['x-plan'];
     req.headers['x-derived-plan'] = plan;
     next();
   } catch (_) {
-    req.detectedPlan   = 'anonymous';
-    req.targetCluster  = FREE_CLUSTER;
+    req.detectedPlan  = 'anonymous';
+    req.targetCluster = FREE_CLUSTER;
     delete req.headers['x-plan'];
     req.headers['x-derived-plan'] = 'anonymous';
     next();
   }
 });
 
-// Step 2: Rate limiting — runs after plan detection so we know the tier
+// Step 2: Rate limiting (HTTP only — WS upgrade path is untouched below)
 app.use(async (req, res, next) => {
   const path = req.path || '';
 
-  // Bypass: health checks and internal-only paths
-  if (RATE_LIMIT_BYPASS_PATHS.has(path)) return next();
+  // Bypass: health checks
+  if (path === '/health') return next();
 
-  // Bypass: WebSocket upgrade requests are long-lived, not per-request
-  if (req.headers.upgrade?.toLowerCase() === 'websocket') return next();
+  // Bypass: WS upgrade requests — these never reach Express middleware anyway
+  // (they go straight to server 'upgrade' event), but guard defensively
+  if (req.headers.upgrade && req.headers.upgrade.toLowerCase() === 'websocket') return next();
 
-  const plan = req.detectedPlan || 'anonymous';
-  const ip   = getRealIp(req);
-
+  const plan   = req.detectedPlan || 'anonymous';
+  const ip     = getRealIp(req);
   const result = await checkRateLimit(ip, plan);
 
   if (result.blocked) {
-    // Set standard rate limit headers so clients can back off intelligently
     res.set({
-      'Retry-After':               String(result.retryAfter),
-      'X-RateLimit-Limit':         String(result.limit),
-      'X-RateLimit-Window':        result.window,
-      'X-RateLimit-Plan':          plan,
+      'Retry-After':      String(result.retryAfter),
+      'X-RateLimit-Limit': String(result.limit),
+      'X-RateLimit-Window': result.window,
+      'X-RateLimit-Plan':   plan,
     });
-
     return res.status(429).json({
       success: false,
       error:   'too_many_requests',
-      // Different messages per plan — frontend uses this to decide which toast to show
+      code:    plan === 'pro' ? 'RATE_LIMIT_PRO' : 'RATE_LIMIT_FREE',
       message: plan === 'pro'
-        ? `Rate limit exceeded. Please slow down — retry in ${result.retryAfter}s.`
+        ? `Rate limit exceeded. Retry in ${result.retryAfter}s.`
         : `Rate limit exceeded. Upgrade to Pro for higher limits. Retry in ${result.retryAfter}s.`,
       retryAfter: result.retryAfter,
       plan,
-      // Hint field for free users — picked up by classifyApiError in email-box.tsx
-      // to trigger the upgrade toast with /pricing link
-      code: plan !== 'pro' ? 'RATE_LIMIT_FREE' : 'RATE_LIMIT_PRO',
     });
   }
 
   next();
 });
 
-// Step 3: Internal API key check
+// Step 3: Internal API key check (unchanged)
 app.use((req, res, next) => {
   const path = req.path || '';
   const isInternal =
@@ -287,38 +235,19 @@ app.use('/', proxy);
 // ── Server ─────────────────────────────────────────────────────────────────
 const server = createServer(app);
 
-// ── WebSocket upgrade ──────────────────────────────────────────────────────
-// WS upgrades bypass Express middleware so we do rate limiting inline here.
-// We use a lighter per-IP connection rate limit (not per-request) since
-// WS connections are long-lived — limiting connection establishment is enough.
+// ── WebSocket upgrade — UNCHANGED from working version ────────────────────
+// Do NOT add rate limiting here — it breaks the handshake.
+// nginx handles WS connection-rate limiting at the outer layer.
 server.on('upgrade', (req, socket, head) => {
   if (!req || !socket) return;
 
   determinePlan(req)
-    .then(async (plan) => {
+    .then((plan) => {
       const target = plan === 'pro' ? PRO_CLUSTER : FREE_CLUSTER;
       if (req.headers) {
         req.headers['x-derived-plan'] = plan;
         delete req.headers['x-plan'];
       }
-
-      // Light rate limit on WS connection establishment (not per-message)
-      // Pro: 20 new connections/min, Free/anon: 5 new connections/min
-      const ip      = getRealIp(req);
-      const wsLimit = plan === 'pro' ? 20 : 5;
-      const wsKey   = `rl:gw:ws:${plan}:${ip}`;
-      try {
-        const count = await redis.incr(wsKey);
-        if (count === 1) await redis.expire(wsKey, 60);
-        if (count > wsLimit) {
-          socket.write('HTTP/1.1 429 Too Many Requests\r\nContent-Length: 0\r\n\r\n');
-          socket.destroy();
-          return;
-        }
-      } catch (_) {
-        // Redis error → fail open
-      }
-
       proxy.upgrade(req, socket, head, { target });
     })
     .catch(() => {
