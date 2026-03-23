@@ -12,7 +12,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
-import ratelimit from './ratelimit';
 import { client as redis } from '../config/redis';
 import {
   DOMAIN_REGISTRY,
@@ -66,14 +65,6 @@ function cacheKey(tier: PlanTier): string {
 //  Handler
 // ─────────────────────────────────────────────────────────────────────────────
 export async function domainsHandler(req: Request, res: Response): Promise<void> {
-  const ip = req.ip;
-
-  try {
-    await ratelimit(ip);
-  } catch {
-    res.status(429).json({ success: false, message: 'Too many requests.' });
-    return;
-  }
 
   const plan = extractPlanFromToken(req.headers.authorization);
   const key  = cacheKey(plan);

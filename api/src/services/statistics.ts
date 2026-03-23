@@ -1,6 +1,5 @@
 // api/src/services/statistics.ts
 import {client} from '../config/redis';
-import ratelimit from "./ratelimit";
 
 
 export function getStats(key: string): Promise<number> {
@@ -20,7 +19,6 @@ export function getStats(key: string): Promise<number> {
 export async function statsHandler(req: any, res: any): Promise<any> {
   const ip = req.ip; // Get the client's IP address
   try {
-    await ratelimit(ip); // Rate limiting
     console.log(`Client ${ip} requesting stats`);
 
     // Fetching queued and denied stats

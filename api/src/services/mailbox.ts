@@ -1,7 +1,6 @@
 // api/src/services/mailbox.ts
 import { client } from '../config/redis';
 import bigInt from "big-integer";
-import ratelimit from "./ratelimit";
 import { gfs, db } from '../config/mongo';
 import { Readable } from 'stream';
 import { ObjectId } from 'mongodb';
@@ -319,7 +318,6 @@ export async function listHandler(req: any, res: any): Promise<any> {
     const mailbox = req.params.name;
     const plan = getPlanFromRequest(req);
     try {
-        await ratelimit(ip);
         const results = await getInbox(mailbox, plan);
         return res.status(200).set({
             'Access-Control-Allow-Origin': '*',
@@ -345,7 +343,6 @@ export async function messageHandler(req: any, res: any): Promise<any> {
     const id = req.params.id;
     const plan = getPlanFromRequest(req);
     try {
-        await ratelimit(ip);
         const messageData = await getMessage(mailbox, id, plan);
         if (!messageData) {
             return res.status(200).json({ success: false, message: "Message not found." });
@@ -366,7 +363,6 @@ export async function deleteHandler(req: any, res: any): Promise<any> {
     const id = req.params.id;
     const plan = getPlanFromRequest(req);
     try {
-        await ratelimit(ip);
         const deleted = await deleteMessageById(mailbox, id, plan);
         if (!deleted) {
             return res.status(200).json({ success: false, message: "Message not found or already deleted." });
