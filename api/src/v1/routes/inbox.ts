@@ -58,22 +58,30 @@ async function assertOwned(userId: string, inbox: string): Promise<boolean> {
   return owned;
 }
 
-/** Strip or tease OTP/verificationLink fields based on the caller's plan */
+ 
+/** Strip or tease OTP/verificationLink fields based on the caller's plan.
+ *  OTP is gated to Growth + Enterprise (OTP_PLANS).
+ *  Developer / Startup users see __DETECTED__ with a correct upgrade hint.
+ */
 function sanitizeMessage(msg: any, plan: ApiPlanName): any {
   if (!OTP_PLANS.includes(plan)) {
+    const hasOtpData = !!(msg.otp || msg.verificationLink);
     return {
       ...msg,
-      otp: msg.otp ? '__DETECTED__' : null,
-      verificationLink: msg.verificationLink ? '__DETECTED__' : null,
-      _upgrade_hint: msg.otp || msg.verificationLink
-        ? 'Upgrade to Developer plan to unlock OTP extraction.'
+      otp:               msg.otp               ? '__DETECTED__' : null,
+      verificationLink:  msg.verificationLink   ? '__DETECTED__' : null,
+      _upgrade_hint: hasOtpData
+        ? 'Upgrade to Growth plan ($49/mo) to unlock OTP & verification-link extraction.'
         : undefined,
     };
   }
   return msg;
 }
 
-/** Filter/strip attachments based on the plan's size limit */
+
+/** Filter/strip attachments based on the plan's size limit.
+ *  Attachments are gated to Startup + (attachments: true in API_PLANS).
+ */
 function sanitizeAttachments(msg: any, plan: ApiPlanName): any {
   const cfg = API_PLANS[plan];
   if (!cfg.features.attachments) {
@@ -81,7 +89,7 @@ function sanitizeAttachments(msg: any, plan: ApiPlanName): any {
     return {
       ...rest,
       _attachments_blocked: msg.attachments?.length
-        ? 'Attachments require Startup plan or above.'
+        ? 'Attachments require Startup plan ($19/mo) or above.'
         : undefined,
     };
   }
@@ -92,6 +100,7 @@ function sanitizeAttachments(msg: any, plan: ApiPlanName): any {
     _attachments_truncated: (msg.attachments || []).some((a: any) => a.size > limitBytes),
   };
 }
+ 
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /v1/inboxes — list registered inboxes
@@ -317,7 +326,7 @@ router.get('/:inbox/otp', async (req: Request, res: Response): Promise<any> => {
     return res.status(403).json({
       success:     false,
       error:       'plan_required',
-      message:     'OTP extraction requires Developer plan ($7/mo) or above.',
+      message:     'OTP extraction requires Growth plan ($49/mo) or above.',
       upgrade_url: 'https://freecustom.email/api/pricing',
     });
   }
