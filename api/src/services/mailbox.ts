@@ -5,6 +5,7 @@ import { gfs, db } from '../config/mongo';
 import { Readable } from 'stream';
 import { ObjectId } from 'mongodb';
 import * as jwt from 'jsonwebtoken';
+import { apiPlanToInternalPlan } from '../v1/api-plans';
 
 const ALTINBOX_MOD: number = parseInt(process.env.ALTINBOX_MOD || "20190422");
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key';
@@ -17,6 +18,9 @@ interface UserJwtPayload {
 }
 
 function getPlanFromRequest(req: any): 'pro' | 'free' | 'anonymous' {
+    if (req.apiUser?.plan) {
+        return apiPlanToInternalPlan(req.apiUser.plan);
+    }
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith('Bearer ')) {
         const token = authHeader.substring(7);

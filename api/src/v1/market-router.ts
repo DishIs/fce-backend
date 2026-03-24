@@ -1,6 +1,10 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import { db } from '../config/mongo';
 import { client as redis } from '../config/redis';
+import { API_PLANS } from './api-plans';
+import { listHandler, messageHandler, deleteHandler } from '../services/mailbox';
+import { statsHandler } from '../services/statistics';
 import inboxRouter from './routes/inbox';
 import domainsRouter from './routes/domains';
 import customDomainsRouter from './routes/custom-domains';
@@ -15,8 +19,12 @@ const marketRouter = Router();
 
 async function marketAuth(req: Request, res: Response, next: NextFunction) {
   const marketSecret = req.header('x-marketplace-secret') || req.header('x-rapidapi-proxy-secret');
-  const marketKey = req.header('x-marketplace-key') || req.header('x-rapidapi-key') || req.header('x-apihub-key');
+  let marketKey = req.header('x-marketplace-key') || req.header('x-rapidapi-key') || req.header('x-apihub-key');
   
+  if (!marketKey) {
+    marketKey = (req.ip || req.headers['x-forwarded-for'] || 'anonymous-market') as string;
+  }
+
   if (!process.env.MARKETPLACE_SECRET) {
     console.warn('MARKETPLACE_SECRET is not set in environment.');
   }
@@ -27,14 +35,6 @@ async function marketAuth(req: Request, res: Response, next: NextFunction) {
       success: false,
       error: 'unauthorized',
       message: 'Invalid or missing marketplace secret header.'
-    });
-  }
-
-  if (!marketKey) {
-    return res.status(401).json({
-      success: false,
-      error: 'unauthorized',
-      message: 'Missing marketplace identity key header (e.g., x-rapidapi-key).'
     });
   }
 
@@ -94,22 +94,25 @@ async function marketAuth(req: Request, res: Response, next: NextFunction) {
       userId: req.userContext.userId!,
       apiKeyId: 'market-key',
       plan: 'free',
-      planConfig: {
-        name: 'free',
-        label: 'Free Tier',
-        price: 0,
-        rateLimit: { requestsPerSecond: 5, requestsPerMonth: 10000 },
-        features: { 
-          otpExtraction: false, 
-          attachments: false, 
-          maxAttachmentSizeMb: 0, 
-          customDomains: false, 
-          websocket: false, 
-          maxWsConnections: 0 
-        }
-      },
+      planConfig: API_PLANS.free,
       credits: 0
     };
+
+    // Ensure marketplace user exists in DB so /inboxes can work
+    const marketUserId = req.apiUser.userId;
+    const existing = await db.collection('users').findOne({ wyiUserId: marketUserId });
+    if (!existing) {
+      await db.collection('users').insertOne({
+        wyiUserId: marketUserId,
+        email: `${marketUserId}@marketplace.internal`,
+        apiPlan: 'free',
+        apiCredits: 0,
+        apiInboxes: [],
+        createdAt: new Date(),
+        lastActive: new Date()
+      });
+    }
+
     res.set({
       'x-ratelimit-limit': '100',
       'x-ratelimit-remaining': (100 - current).toString(),
@@ -128,6 +131,12 @@ marketRouter.use('/inboxes', inboxRouter);
 marketRouter.use('/domains', domainsRouter);
 marketRouter.use('/custom-domains', customDomainsRouter);
 marketRouter.use('/webhooks', webhookRouter);
+
+// ── New Market Endpoints ───────────────────────────────────────────────────
+marketRouter.get('/mailbox/:name', listHandler);
+marketRouter.get('/mailbox/:name/message/:id', messageHandler);
+marketRouter.delete('/mailbox/:name/message/:id', deleteHandler);
+marketRouter.get('/health', statsHandler);
 
 // Catch-all for market routes so they don't fall through to /v1
 marketRouter.use((req, res) => {
