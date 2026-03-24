@@ -1,9 +1,9 @@
 # Marketplace API Documentation
 
-Welcome to the Maildrop Marketplace API. This API allows you to integrate temporary mailbox functionality into your applications.
+Welcome to the FreeCustom.Email Marketplace API. This API allows you to integrate temporary mailbox functionality into your applications.
 
 ## Base URL
-All endpoints are relative to the marketplace base URL (e.g., `/v1/market`).
+All endpoints are relative to the marketplace base URL (e.g., `/https://temp-mail-maildrop1.p.rapidapi.com`).
 
 ## Authentication
 This API is designed for marketplaces. You can identify users via `x-marketplace-key`, `x-rapidapi-key`, or `x-apihub-key`. If no key is provided, the client's IP address will be used for identification and rate limiting.
@@ -110,23 +110,26 @@ This API is designed for marketplaces. You can identify users via `x-marketplace
 
 ---
 
-### 5. Inboxes Management
+### 5. GET /domains
+**Purpose:** Fetches all available free domains for use with the marketplace API.
 
-#### List Inboxes
-- **URL:** `/inboxes`
-- **Method:** `GET`
-
-#### Add Inbox
-- **URL:** `/inboxes`
-- **Method:** `POST`
-- **Body:** `{"inbox": "user@example.com"}`
-
-#### Remove Inbox
-- **URL:** `/inboxes/{inbox}`
-- **Method:** `DELETE`
+**Successful Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "domain": "ditapi.info",
+      "tier": "free",
+      "tags": ["common"]
+    }
+  ],
+  "count": 1
+}
+```
 
 ---
 
-## Advertise Our API
-Explore our full API capabilities and premium features at [https://freecustom.email/api](https://freecustom.email/api).
+## Enable advanced features
+Explore our full API capabilities and premium features(custom domains, otp extraction, websockets, attachments, and many more) at [https://freecustom.email/api](https://freecustom.email/api).
 Try our official CLI tool: [https://freecustom.email/api/cli](https://freecustom.email/api/cli).
