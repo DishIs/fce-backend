@@ -83,26 +83,26 @@ connectToMongo().then(() => {
     ) => {
       const providedKey = req.header('x-internal-api-key');
       if (providedKey && providedKey === INTERNAL_API_KEY) {
-        const signature      = req.header('x-signature') as string;
-        const timestamp      = req.header('x-timestamp') as string;
-        const nonce          = req.header('x-nonce') as string;
+        const signature = req.header('x-signature') as string;
+        const timestamp = req.header('x-timestamp') as string;
+        const nonce = req.header('x-nonce') as string;
         const idempotencyKey = req.header('x-idempotency-key') as string;
-        const secret         = process.env.INTERNAL_API_SECRET || '';
-        const pathAndQuery   = req.originalUrl || req.url;
-        const method         = req.method;
+        const secret = process.env.INTERNAL_API_SECRET || '';
+        const pathAndQuery = req.originalUrl || req.url;
+        const method = req.method;
 
         if (!await verifySignature(signature, timestamp, method, pathAndQuery, req.rawBody, secret, nonce)) {
           return res.status(403).json({ success: false, message: 'Forbidden: Invalid signature.' });
         }
 
         if (idempotencyKey) {
-          const idempKey          = `idempotency:${idempotencyKey}`;
+          const idempKey = `idempotency:${idempotencyKey}`;
           const cachedResponseStr = await redis.get(idempKey);
 
           if (cachedResponseStr) {
             try {
               const cachedResponse = JSON.parse(cachedResponseStr);
-              const payloadHash    = crypto.createHash('sha256').update(req.rawBody ? req.rawBody.toString('utf8') : '').digest('hex');
+              const payloadHash = crypto.createHash('sha256').update(req.rawBody ? req.rawBody.toString('utf8') : '').digest('hex');
               if (cachedResponse.payloadHash === payloadHash) {
                 return res.status(cachedResponse.status).json(cachedResponse.body);
               } else {
@@ -116,14 +116,14 @@ connectToMongo().then(() => {
           const originalJson = res.json;
           res.json = function (body) {
             const payloadHash = crypto.createHash('sha256').update(req.rawBody ? req.rawBody.toString('utf8') : '').digest('hex');
-            const cacheData   = JSON.stringify({ status: res.statusCode, body, payloadHash });
+            const cacheData = JSON.stringify({ status: res.statusCode, body, payloadHash });
             redis.set(idempKey, cacheData, { EX: 86400 }).catch(console.error);
             return originalJson.call(this, body);
           };
         }
 
-        const securePlan        = req.header('x-derived-plan') || 'free';
-        req.headers['x-plan']   = securePlan;
+        const securePlan = req.header('x-derived-plan') || 'free';
+        req.headers['x-plan'] = securePlan;
 
         return next();
       }
@@ -134,6 +134,7 @@ connectToMongo().then(() => {
   ];
 
   app.use(express.json({
+    limit: '1mb', // Increased from default 100kb to handle large Paddle v3 payloads
     verify: (req: express.Request, res, buf) => {
       req.rawBody = buf;
     },
@@ -154,8 +155,8 @@ connectToMongo().then(() => {
 
   app.use((req, res, next) => {
     const isWsUpgrade = req.headers.upgrade?.toLowerCase() === 'websocket';
-    const isV1        = req.path.startsWith('/v1');
-    const isDomains   = req.path === '/domains' || req.path.startsWith('/domains/');
+    const isV1 = req.path.startsWith('/v1');
+    const isDomains = req.path === '/domains' || req.path.startsWith('/domains/');
     if (isWsUpgrade || isV1 || isDomains) return next();
 
     let i = 0;
@@ -171,8 +172,8 @@ connectToMongo().then(() => {
   });
 
   const server = createServer(app);
-  const wss    = new WebSocket.Server({ server }); // original — not noServer
-  const PORT   = process.env.PORT || 3000;
+  const wss = new WebSocket.Server({ server }); // original — not noServer
+  const PORT = process.env.PORT || 3000;
 
   // ── Mailbox ────────────────────────────────────────────────────────────────
   app.get('/mailbox/:name', listHandler);
@@ -296,7 +297,7 @@ connectToMongo().then(() => {
   (async () => {
     await subscriber.pSubscribe('mailbox:events:*', (message, channel) => {
       try {
-        const event   = JSON.parse(message);
+        const event = JSON.parse(message);
         const mailbox = channel.split(':')[2];
         if (mailbox === 'stats') { sendStatsToAllStatsClients(); return; }
         notifyMailbox(mailbox, event);

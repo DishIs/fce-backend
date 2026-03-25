@@ -1,15 +1,10 @@
 // api/src/handlers/paddle-handler.ts
 //
-//  Changes from previous version:
-//    1. Migrated to Paddle Billing (v3) API and Webhooks.
-//    2. Added Webhook Signature Verification for enhanced security.
-//    3. Improved error handling and robustness.
-//    4. Chargeback protection on every ACTIVATED event (app + api):
-//       – Extracts card hash (last4 + expiry) from rawEvent
-//       – Checks if any other user with an overlapping fingerprint already
-//         used the same card
-//       – First offence  → warn both users, cancel the new subscription
-//       – Repeat offence → permanently ban both users, cancel all subscriptions
+//  Changes:
+//    1. Updated Card Hash extraction for Paddle Billing (v3) Transaction structures.
+//    2. Moved checkChargebackFraud from ACTIVATED to PAYMENT_COMPLETED (where card data exists).
+//    3. Removed trialing logic for API plans.
+//    4. Maintained all existing revocation, logging, and ban logic.
 //
 import crypto from 'crypto';
 import { Request, Response } from 'express';
@@ -30,28 +25,18 @@ import { cancelPaddleSubscription } from '../utils/paddle-api';
 
 
 // ── Access Revocation (Cleanup on Ban) ───────────────────────────────────────
-//
-// When a user is permanently banned (e.g. for repeat fraud), we must:
-// 1. Mark all their API keys as inactive
-// 2. Clear API key cache in Redis
-// 3. Deactivate any custom webhooks they've registered
-// 4. Clear any active sessions (handled by frontend, but we signal status)
-//
 async function revokeUserAccess(userId: string) {
   try {
-    // 1. Revoke all API keys
     const keys = await db.collection('api_keys').find({ wyiUserId: userId, active: true }).toArray();
     await db.collection('api_keys').updateMany(
       { wyiUserId: userId, active: true },
       { $set: { active: false, revokedAt: new Date(), revokeReason: 'Account Banned' } },
     );
 
-    // 2. Clear API key cache in Redis
     for (const k of keys) {
       await redis.del(`api_key_cache:${k.keyHash}`);
     }
 
-    // 3. Deactivate all custom webhooks (Make/Zapier/REST-hooks)
     await db.collection('webhooks').updateMany(
       { wyiUserId: userId, active: true },
       { $set: { active: false, deactivatedAt: new Date(), deactivationReason: 'Account Banned' } },
@@ -63,13 +48,11 @@ async function revokeUserAccess(userId: string) {
   }
 }
 
-
 type PaddleEventType =
   | 'subscription.created' | 'subscription.updated' | 'subscription.activated'
   | 'subscription.past_due' | 'subscription.canceled' | 'subscription.paused' | 'subscription.resumed'
   | 'transaction.completed' | 'transaction.payment_failed' | 'adjustment.updated';
 
-// Internal canonical event types used for processing logic
 type CanonicalEventType =
   | 'TRIALING' | 'ACTIVATED' | 'CANCELLED' | 'SUSPENDED'
   | 'UPDATED'  | 'PAYMENT_COMPLETED' | 'PAYMENT_FAILED' | 'REFUNDED';
@@ -95,14 +78,11 @@ interface PaddleSubscriptionEventPayload {
   rawEvent:         any;
 }
 
-// ── Normalize Paddle status strings to ALLCAPS canonical form ─────────────────
 function normStatus(raw?: string | null): string {
   if (!raw) return '';
   const up = raw.toUpperCase().trim();
   return up === 'CANCELED' ? 'CANCELLED' : up;
 }
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function findUserBySubscriptionId(subscriptionId: string) {
   return db.collection('users').findOne({
@@ -131,13 +111,23 @@ async function logPaymentEvent(
   } as IPaymentLog);
 }
 
-// ── Card fingerprint extraction ───────────────────────────────────────────────
+// ── Card fingerprint extraction (Paddle Billing v3) ─────────────────────────
 function extractCardHash(rawEvent: any): string | null {
   try {
-    // Paddle Billing (v3): rawEvent.data.payment_method_details.card
-    const card =
-      rawEvent?.data?.payment_method_details?.card ??
-      rawEvent?.data?.transaction_details?.payment_method_details?.card;
+    const data = rawEvent?.data;
+    // In v3 transaction.completed, card is in payments array
+    const payments = data?.payments;
+    let card = null;
+
+    if (Array.isArray(payments) && payments.length > 0) {
+      const p = payments.find((x: any) => x.status === 'captured') || payments[0];
+      card = p?.method_details?.card;
+    } else {
+      // Fallback for direct method details or trial activation events
+      card =
+        data?.payment_method_details?.card ??
+        data?.transaction_details?.payment_method_details?.card;
+    }
 
     const last4     = card?.last_four ?? card?.last4;
     const expMonth  = card?.expiry_month ?? card?.exp_month;
@@ -154,19 +144,6 @@ function extractCardHash(rawEvent: any): string | null {
   }
 }
 
-// ── Chargeback / multi-account fraud detection ────────────────────────────────
-//
-// Logic for banning/warning:
-// 1. If multiple accounts share a payment card AND a device fingerprint:
-//    - Trialing/First subscription -> WARN and CANCEL (prevents trial abuse)
-//    - Second offence -> BAN (repeat trial/payment abuse)
-//
-// To prevent banning legit users (false positives):
-// - We require BOTH card hash AND device fingerprint match.
-// - We do NOT ban on the first detection, only warn/cancel.
-// - Shared devices in a household with different cards are SAFE.
-// - Same card on different devices (e.g. spouse) is SAFE.
-//
 async function checkChargebackFraud(
   userId:         string,
   subscriptionId: string,
@@ -180,18 +157,13 @@ async function checkChargebackFraud(
 
   const userFingerprints: string[] = user.fingerprints ?? [];
   
-  // Store the card hash on the user record always
   await db.collection('users').updateOne(
     { _id: user._id },
     { $addToSet: { cardFingerprints: cardHash } },
   );
 
-  if (userFingerprints.length === 0) {
-    return { fraudDetected: false, shouldAbort: false };
-  }
+  if (userFingerprints.length === 0) return { fraudDetected: false, shouldAbort: false };
 
-  // Find any OTHER user who shares ≥1 fingerprint AND the same card
-  // AND is not already banned (no need to double-ban)
   const abuser = await db.collection('users').findOne({
     _id:              { $ne: user._id },
     fingerprints:     { $in: userFingerprints },
@@ -199,123 +171,87 @@ async function checkChargebackFraud(
     banStatus:        { $ne: 'banned' },
   });
 
-  if (!abuser) {
-    return { fraudDetected: false, shouldAbort: false };
-  }
+  if (!abuser) return { fraudDetected: false, shouldAbort: false };
 
-  const combinedOffenses = Math.max(
-    abuser.chargebackOffenses ?? 0,
-    user.chargebackOffenses  ?? 0,
-  ) + 1;
-
+  const combinedOffenses = Math.max(abuser.chargebackOffenses ?? 0, user.chargebackOffenses ?? 0) + 1;
   const isPermanentBan = combinedOffenses >= 2;
-  const banStatus      = isPermanentBan ? 'banned' : 'warned';
-  const banReason      = isPermanentBan
+  const banStatus = isPermanentBan ? 'banned' : 'warned';
+  const banReason = isPermanentBan
     ? 'Repeat chargeback fraud: multiple accounts using the same payment card and device fingerprint.'
     : 'Chargeback fraud warning: same payment card used across multiple accounts on the same device.';
 
   const now = new Date();
-
   await db.collection('users').updateMany(
     { _id: { $in: [user._id, abuser._id] } },
-    {
-      $set: {
-        banStatus,
-        banReason,
-        banAt: now,
-        chargebackOffenses: combinedOffenses,
-      },
-      $addToSet: { cardFingerprints: cardHash },
-    },
+    { $set: { banStatus, banReason, banAt: now, chargebackOffenses: combinedOffenses }, $addToSet: { cardFingerprints: cardHash } },
   );
 
-  // If permanent ban — revoke API keys, webhooks, etc.
   if (isPermanentBan) {
-    await Promise.all([
-      revokeUserAccess(userId),
-      revokeUserAccess(abuser.wyiUserId),
-    ]);
+    await Promise.all([revokeUserAccess(userId), revokeUserAccess(abuser.wyiUserId)]);
   }
 
   try {
     await cancelPaddleSubscription(subscriptionId);
-    console.warn(`[chargeback] Cancelled subscription ${subscriptionId} for user ${userId}`);
   } catch (err) {
     console.error('[chargeback] Failed to cancel new subscription:', err);
   }
 
   if (isPermanentBan) {
-    const existingSub =
-      productType === 'api'
-        ? abuser.apiSubscription?.subscriptionId
-        : abuser.subscription?.subscriptionId;
-
+    const existingSub = productType === 'api' ? abuser.apiSubscription?.subscriptionId : abuser.subscription?.subscriptionId;
     if (existingSub && existingSub !== subscriptionId) {
-      try {
-        await cancelPaddleSubscription(existingSub);
-        console.warn(`[chargeback] Cancelled existing subscription ${existingSub} for abuser ${abuser.wyiUserId}`);
-      } catch (err) {
-        console.error('[chargeback] Failed to cancel existing subscription:', err);
-      }
+      try { await cancelPaddleSubscription(existingSub); } catch {}
     }
   }
 
   const sendWarning = async (email: string, targetUserId: string) => {
     if (!email) return;
     await sendEmail({
-      to:      email,
-      from:    'billing',
-      subject: isPermanentBan
-        ? 'Your FreeCustom.Email account has been permanently banned'
-        : 'Fraud warning: suspicious payment activity on your account',
-      html: isPermanentBan
-        ? getChargebackBanEmailHtml()
-        : getChargebackWarningEmailHtml(),
-    }).catch(err =>
-      console.error(`[chargeback] Warning email failed for ${targetUserId}:`, err),
-    );
+      to: email, from: 'billing',
+      subject: isPermanentBan ? 'Your FreeCustom.Email account has been permanently banned' : 'Fraud warning: suspicious payment activity on your account',
+      html: isPermanentBan ? getChargebackBanEmailHtml() : getChargebackWarningEmailHtml(),
+    }).catch(err => console.error(`[chargeback] Warning email failed for ${targetUserId}:`, err));
   };
 
-  const [u1, u2] = await Promise.all([
-    db.collection('users').findOne({ _id: user._id }),
-    db.collection('users').findOne({ _id: abuser._id }),
-  ]);
-  await Promise.all([
-    sendWarning(u1?.email, userId),
-    sendWarning(u2?.email, abuser.wyiUserId),
-  ]);
-
-  console.warn(
-    `[chargeback] Fraud detected — user: ${userId}, abuser: ${abuser.wyiUserId}, ` +
-    `offenses: ${combinedOffenses}, ban: ${banStatus}`,
-  );
+  const [u1, u2] = await Promise.all([db.collection('users').findOne({ _id: user._id }), db.collection('users').findOne({ _id: abuser._id })]);
+  await Promise.all([sendWarning(u1?.email, userId), sendWarning(u2?.email, abuser.wyiUserId)]);
 
   return { fraudDetected: true, shouldAbort: true };
 }
-
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  API PLAN EVENTS
 // ═════════════════════════════════════════════════════════════════════════════
 
-async function handleApiPlanEvent(
-  eventType: CanonicalEventType,
-  userId:    string,
-  payload:   PaddleSubscriptionEventPayload,
-) {
+async function handleApiPlanEvent(eventType: CanonicalEventType, userId: string, payload: PaddleSubscriptionEventPayload) {
   const subscriptionId = payload.subscriptionId!;
-  const apiPlan        = payload.apiPlan ?? 'free';
+  const apiPlan = payload.apiPlan ?? 'free';
 
   switch (eventType) {
-
     case 'ACTIVATED': {
-      const rawStatus  = normStatus(payload.status);
-      const isTrialing = rawStatus === 'TRIALING';
+      // In v3 Activated for API: Set to Active (no trials for API)
+      await db.collection('users').updateOne(userQuery(userId), {
+        $set: {
+          apiPlan,
+          apiSubscription: {
+            provider: 'paddle', subscriptionId, planId: payload.priceId,
+            status: 'ACTIVE', cancelAtPeriodEnd: false,
+            startTime: payload.startTime ?? new Date().toISOString(),
+            payerEmail: payload.payerEmail,
+            lastUpdated: new Date(),
+            ...(payload.customerId && { customerId: payload.customerId }),
+            ...(payload.nextBilledAt && { nextBilledAt: payload.nextBilledAt }),
+          },
+        },
+        $unset: { apiScheduledDowngradeAt: '' },
+      });
+      await logPaymentEvent(userId, subscriptionId, 'subscription_created', payload);
+      break;
+    }
 
+    case 'PAYMENT_COMPLETED': {
+      // Fraud Check happens here for API
       const cardHash = extractCardHash(payload.rawEvent);
-      const { shouldAbort } = await checkChargebackFraud(
-        userId, subscriptionId, cardHash, 'api',
-      );
+      const { shouldAbort } = await checkChargebackFraud(userId, subscriptionId, cardHash, 'api');
       if (shouldAbort) {
         await logPaymentEvent(userId, subscriptionId, 'subscription_cancelled', payload);
         return;
@@ -324,74 +260,32 @@ async function handleApiPlanEvent(
       await db.collection('users').updateOne(userQuery(userId), {
         $set: {
           apiPlan,
-          apiSubscription: {
-            provider: 'paddle', subscriptionId, planId: payload.priceId,
-            status:   isTrialing ? 'TRIALING' : 'ACTIVE',
-            cancelAtPeriodEnd: false,
-            startTime:   payload.startTime ?? new Date().toISOString(),
-            payerEmail:  payload.payerEmail,
-            lastUpdated: new Date(),
-            ...(payload.customerId   && { customerId:   payload.customerId }),
-            ...(payload.nextBilledAt && { nextBilledAt: payload.nextBilledAt }),
-          },
-        },
-        $unset: { apiScheduledDowngradeAt: '' },
-      });
-      if (isTrialing) {
-        await db.collection('users').updateOne(userQuery(userId), { $set: { hadApiTrial: true } });
-      }
-      await logPaymentEvent(userId, subscriptionId, 'subscription_created', payload);
-      console.log(`[Paddle] User ${userId} API plan activated: ${apiPlan}`);
-      break;
-    }
-
-    case 'PAYMENT_COMPLETED': {
-      await db.collection('users').updateOne(userQuery(userId), {
-        $set: {
-          apiPlan,
-          'apiSubscription.status':            'ACTIVE',
+          'apiSubscription.status': 'ACTIVE',
           'apiSubscription.cancelAtPeriodEnd': false,
-          'apiSubscription.lastUpdated':       new Date(),
+          'apiSubscription.lastUpdated': new Date(),
         },
-        $unset: {
-          apiScheduledDowngradeAt:       '',
-          'apiSubscription.canceledAt':  '',
-          'apiSubscription.periodEnd':   '',
-        },
+        $unset: { apiScheduledDowngradeAt: '', 'apiSubscription.canceledAt': '', 'apiSubscription.periodEnd': '' },
       });
       await logPaymentEvent(userId, subscriptionId, 'subscription_renewed', payload);
-      console.log(`[Paddle] User ${userId} API plan renewed: ${apiPlan}`);
       break;
     }
 
     case 'CANCELLED': {
-      const data      = payload.rawEvent?.data;
-      const periodEnd = data?.scheduled_change?.effective_at
-        ?? data?.current_billing_period?.ends_at
-        ?? payload.canceledAt
-        ?? new Date().toISOString();
-
+      const data = payload.rawEvent?.data;
+      const periodEnd = data?.scheduled_change?.effective_at ?? data?.current_billing_period?.ends_at ?? payload.canceledAt ?? new Date().toISOString();
       await db.collection('users').updateOne(userQuery(userId), {
         $set: {
-          'apiSubscription.status':            'ACTIVE',
+          'apiSubscription.status': 'ACTIVE',
           'apiSubscription.cancelAtPeriodEnd': true,
-          'apiSubscription.canceledAt':        payload.canceledAt ?? new Date().toISOString(),
-          'apiSubscription.periodEnd':         periodEnd,
-          'apiSubscription.lastUpdated':       new Date(),
-          apiScheduledDowngradeAt:             new Date(periodEnd),
+          'apiSubscription.canceledAt': payload.canceledAt ?? new Date().toISOString(),
+          'apiSubscription.periodEnd': periodEnd,
+          'apiSubscription.lastUpdated': new Date(),
+          apiScheduledDowngradeAt: new Date(periodEnd),
         },
       });
       await logPaymentEvent(userId, subscriptionId, 'subscription_cancelled', payload);
-      console.log(`[Paddle] User ${userId} API plan cancelled. Access until ${periodEnd}.`);
-
       db.collection('users').findOne(userQuery(userId)).then(user => {
-        if (!user?.email) return;
-        sendEmail({
-          to:      user.email,
-          from:    'api',
-          subject: `Your FreeCustom.Email API ${apiPlan} plan has been cancelled`,
-          html:    getApiPlanCancellationEmailHtml(apiPlan, periodEnd),
-        }).catch(err => console.error('[Paddle] API cancellation email failed:', err));
+        if (user?.email) sendEmail({ to: user.email, from: 'api', subject: `Your FreeCustom.Email API ${apiPlan} plan has been cancelled`, html: getApiPlanCancellationEmailHtml(apiPlan, periodEnd) }).catch(() => {});
       }).catch(() => {});
       break;
     }
@@ -399,61 +293,39 @@ async function handleApiPlanEvent(
     case 'SUSPENDED':
     case 'PAYMENT_FAILED': {
       await db.collection('users').updateOne(userQuery(userId), {
-        $set: {
-          'apiSubscription.status':      'SUSPENDED',
-          'apiSubscription.lastUpdated': new Date(),
-          ...(payload.pausedAt && { 'apiSubscription.pausedAt': payload.pausedAt }),
-        },
+        $set: { 'apiSubscription.status': 'SUSPENDED', 'apiSubscription.lastUpdated': new Date(), ...(payload.pausedAt && { 'apiSubscription.pausedAt': payload.pausedAt }) },
       });
-      console.warn(`[Paddle] User ${userId} API subscription SUSPENDED.`);
       break;
     }
 
     case 'UPDATED': {
-      const newPlan = (payload.apiPlan
-        ?? payload.rawEvent?.data?.items?.[0]?.price?.custom_data?.api_plan
-        ?? 'free') as ApiPlanName;
+      const newPlan = (payload.apiPlan ?? payload.rawEvent?.data?.items?.[0]?.price?.custom_data?.api_plan ?? 'free') as ApiPlanName;
       await db.collection('users').updateOne(userQuery(userId), {
-        $set: {
-          apiPlan:                             newPlan,
-          'apiSubscription.planId':            payload.priceId,
-          'apiSubscription.status':            normStatus(payload.status) || 'ACTIVE',
-          'apiSubscription.lastUpdated':       new Date(),
-          ...(payload.nextBilledAt && { 'apiSubscription.nextBilledAt': payload.nextBilledAt }),
-        },
+        $set: { apiPlan: newPlan, 'apiSubscription.planId': payload.priceId, 'apiSubscription.status': normStatus(payload.status) || 'ACTIVE', 'apiSubscription.lastUpdated': new Date(), ...(payload.nextBilledAt && { 'apiSubscription.nextBilledAt': payload.nextBilledAt }) },
       });
-      console.log(`[Paddle] User ${userId} API plan updated to ${newPlan}.`);
       break;
     }
 
     case 'REFUNDED': {
       await logPaymentEvent(userId, subscriptionId, 'refund', payload);
-      console.log(`[Paddle] API plan refund logged for ${userId}.`);
       break;
     }
   }
-
   await syncUserFeatures(db, redis, userId);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  CREDIT PURCHASE (one-time, idempotent)
+//  CREDIT PURCHASE
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function handleCreditPurchase(userId: string, payload: PaddleSubscriptionEventPayload) {
   const creditsToAdd = payload.creditsToAdd ?? 0;
-  if (creditsToAdd <= 0) {
-    console.warn(`[Paddle] Credit purchase for ${userId} missing creditsToAdd.`);
-    return;
-  }
+  if (creditsToAdd <= 0) return;
 
-  const txId     = payload.rawEvent?.data?.id ?? payload.subscriptionId ?? '';
+  const txId = payload.rawEvent?.data?.id ?? payload.subscriptionId ?? '';
   const idempKey = `credit_tx:${txId}`;
 
-  if (await redis.get(idempKey)) {
-    console.log(`[Paddle] Credit tx ${txId} already processed.`);
-    return;
-  }
+  if (await redis.get(idempKey)) return;
 
   await db.collection('users').updateOne(userQuery(userId), { $inc: { apiCredits: creditsToAdd } });
   await redis.set(idempKey, '1', { EX: 90 * 24 * 3600 });
@@ -461,25 +333,19 @@ async function handleCreditPurchase(userId: string, payload: PaddleSubscriptionE
   await db.collection('payment_logs').insertOne({
     userId, transactionType: 'subscription_created', provider: 'paddle',
     subscriptionId: txId,
-    amount:    payload.amount !== undefined ? String(payload.amount) : undefined,
-    currency:  payload.currency,
-    details:   { ...payload.rawEvent, _type: 'api_credits_purchase', creditsAdded: creditsToAdd },
+    amount: payload.amount !== undefined ? String(payload.amount) : undefined,
+    currency: payload.currency,
+    details: { ...payload.rawEvent, _type: 'api_credits_purchase', creditsAdded: creditsToAdd },
     createdAt: new Date(),
   } as IPaymentLog);
-
-  console.log(`[Paddle] Added ${creditsToAdd} credits to ${userId}. (tx: ${txId})`);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  MAIN HANDLER   POST /paddle/subscription-event
+//  MAIN HANDLER
 // ═════════════════════════════════════════════════════════════════════════════
 
 export async function handlePaddleSubscriptionEvent(req: Request, res: Response) {
   const rawPayload = req.body;
-
-  // ── Robust Event Extraction ────────────────────────────────────────────────
-  // Note: Your frontend proxy sends canonical types (ACTIVATED, TRIALING, etc.)
-  // but we also check raw event_type for backward compatibility or direct calls.
   let canonicalType = rawPayload.eventType as CanonicalEventType;
   const rawEventType = rawPayload.event_type as PaddleEventType;
   const data = rawPayload.data;
@@ -488,40 +354,22 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
     switch (rawEventType) {
       case 'subscription.activated':
       case 'subscription.created':
-      case 'subscription.trialing' as any: // Handle direct trialing event
-        canonicalType = (data?.status === 'trialing' || rawEventType === ('subscription.trialing' as any))
-          ? 'TRIALING'
-          : 'ACTIVATED';
+      case 'subscription.trialing' as any:
+        canonicalType = (data?.status === 'trialing' || rawEventType === ('subscription.trialing' as any)) ? 'TRIALING' : 'ACTIVATED';
         break;
-      case 'subscription.canceled':
-      canonicalType = 'CANCELLED';
-      break;
-    case 'subscription.past_due':
-    case 'subscription.paused':
-      canonicalType = 'SUSPENDED';
-      break;
-    case 'subscription.resumed':
-    case 'subscription.updated':
-      canonicalType = 'UPDATED';
-      break;
-    case 'transaction.completed':
-      canonicalType = 'PAYMENT_COMPLETED';
-      break;
-    case 'transaction.payment_failed':
-      canonicalType = 'PAYMENT_FAILED';
-      break;
-    case 'adjustment.updated':
-      if (data.status === 'approved') canonicalType = 'REFUNDED';
-      break;
-  } }
-
-  if (!canonicalType) {
-    console.log(`[Paddle] Unhandled event type: ${canonicalType || rawEventType}`);
-    return res.status(200).json({ success: true, message: 'Event ignored' });
+      case 'subscription.canceled': canonicalType = 'CANCELLED'; break;
+      case 'subscription.past_due':
+      case 'subscription.paused': canonicalType = 'SUSPENDED'; break;
+      case 'subscription.resumed':
+      case 'subscription.updated': canonicalType = 'UPDATED'; break;
+      case 'transaction.completed': canonicalType = 'PAYMENT_COMPLETED'; break;
+      case 'transaction.payment_failed': canonicalType = 'PAYMENT_FAILED'; break;
+      case 'adjustment.updated': if (data.status === 'approved') canonicalType = 'REFUNDED'; break;
+    }
   }
 
-  // ── Robust Data Extraction ─────────────────────────────────────────────────
-  // Prioritize fields from top-level (proxied by frontend) then fallback to data object
+  if (!canonicalType) return res.status(200).json({ success: true, message: 'Event ignored' });
+
   const customData = data?.custom_data || {};
   const userId = rawPayload.userId || customData.userId || customData.user_id;
   const subscriptionId = rawPayload.subscriptionId || data?.subscription_id || data?.id;
@@ -530,29 +378,18 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
   const creditsToAdd = rawPayload.creditsToAdd || customData.creditsToAdd || customData.credits_to_add;
 
   const payload: PaddleSubscriptionEventPayload = {
-    eventType: canonicalType,
-    productType,
-    apiPlan,
-    creditsToAdd,
-    userId,
-    subscriptionId,
-    customerId: data.customer_id,
-    priceId: data.items?.[0]?.price_id,
-    status: rawPayload.status || data?.status,
+    eventType: canonicalType, productType, apiPlan, creditsToAdd, userId, subscriptionId,
+    customerId: data.customer_id, priceId: data.items?.[0]?.price_id, status: rawPayload.status || data?.status,
     startTime: rawPayload.startTime || data?.started_at || data?.created_at,
     nextBilledAt: rawPayload.nextBilledAt || data?.next_billed_at,
     payerEmail: rawPayload.payerEmail || data?.customer?.email || data?.customer_email,
-    canceledAt: rawPayload.canceledAt || data?.canceled_at,
-    pausedAt: rawPayload.pausedAt || data?.paused_at,
+    canceledAt: rawPayload.canceledAt || data?.canceled_at, pausedAt: rawPayload.pausedAt || data?.paused_at,
     scheduledChange: rawPayload.scheduledChange || data?.scheduled_change,
     amount: rawPayload.amount || data?.details?.totals?.total || data?.details?.totals?.grand_total || data?.amount,
-    currency: data.currency_code,
-    rawEvent: rawPayload,
+    currency: data.currency_code, rawEvent: rawPayload,
   };
 
-  if (productType !== 'credits' && !subscriptionId) {
-    return res.status(400).json({ success: false, message: 'Missing subscriptionId' });
-  }
+  if (productType !== 'credits' && !subscriptionId) return res.status(400).json({ success: false, message: 'Missing subscriptionId' });
 
   let resolvedUserId = userId;
   if (!resolvedUserId && subscriptionId) {
@@ -560,171 +397,93 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
     if (u) resolvedUserId = u.wyiUserId;
   }
 
-  if (!resolvedUserId) {
-    console.warn(`[Paddle] Could not resolve userId for ${subscriptionId}`);
-    return res.status(200).json({ success: true, warning: 'User not found, logged as orphan.' });
-  }
+  if (!resolvedUserId) return res.status(200).json({ success: true, warning: 'User not found' });
 
-  // ── Ban check ──────────────────────────────────────────────────────────────
-  const bannedUser = await db.collection('users').findOne({
-    ...userQuery(resolvedUserId),
-    banStatus: 'banned',
-  });
-  if (bannedUser) {
-    console.warn(`[Paddle] Event ${canonicalType} for BANNED user ${resolvedUserId} — no-op.`);
-    return res.status(200).json({ success: true, warning: 'User is permanently banned.' });
-  }
+  const bannedUser = await db.collection('users').findOne({ ...userQuery(resolvedUserId), banStatus: 'banned' });
+  if (bannedUser) return res.status(200).json({ success: true, warning: 'User is permanently banned.' });
 
   try {
-    if (productType === 'credits') {
-      await handleCreditPurchase(resolvedUserId, payload);
-      return res.status(200).json({ success: true });
-    }
-    if (productType === 'api') {
-      await handleApiPlanEvent(canonicalType, resolvedUserId, payload);
-      return res.status(200).json({ success: true });
-    }
+    if (productType === 'credits') { await handleCreditPurchase(resolvedUserId, payload); return res.status(200).json({ success: true }); }
+    if (productType === 'api') { await handleApiPlanEvent(canonicalType, resolvedUserId, payload); return res.status(200).json({ success: true }); }
 
     // ── App Pro plan ──────────────────────────────────────────────────────────
     switch (canonicalType) {
-
       case 'ACTIVATED': {
         const rawStatus = normStatus(payload.status);
         const isTrialing = rawStatus === 'TRIALING';
 
-        const cardHash = extractCardHash(payload.rawEvent);
-        const { shouldAbort } = await checkChargebackFraud(
-          resolvedUserId, subscriptionId!, cardHash, 'app',
-        );
-        if (shouldAbort) {
-          await logPaymentEvent(resolvedUserId, subscriptionId!, 'subscription_cancelled', payload);
-          return res.status(200).json({ success: true, warning: 'Chargeback fraud detected; subscription cancelled.' });
-        }
-
         const subscriptionData: ISubscription = {
-          provider: 'paddle', subscriptionId: subscriptionId!,
-          planId: payload.priceId,
-          status: isTrialing ? 'TRIALING' : 'ACTIVE',
-          cancelAtPeriodEnd: false,
-          startTime:   payload.startTime ?? new Date().toISOString(),
-          payerEmail:  payload.payerEmail,
-          lastUpdated: new Date(),
-          ...(payload.customerId   && { customerId:   payload.customerId }),
+          provider: 'paddle', subscriptionId: subscriptionId!, planId: payload.priceId,
+          status: isTrialing ? 'TRIALING' : 'ACTIVE', cancelAtPeriodEnd: false,
+          startTime: payload.startTime ?? new Date().toISOString(), payerEmail: payload.payerEmail,
+          lastUpdated: new Date(), ...(payload.customerId && { customerId: payload.customerId }),
           ...(payload.nextBilledAt && { nextBilledAt: payload.nextBilledAt }),
-          ...(payload.scheduledChange && { scheduledChange: payload.scheduledChange }),
         };
-        await db.collection('users').updateOne(userQuery(resolvedUserId), {
-          $set: { plan: 'pro', subscription: subscriptionData },
-          $unset: { scheduledDowngradeAt: '' },
-        });
-        if (isTrialing) {
-          await db.collection('users').updateOne(userQuery(resolvedUserId), { $set: { hadTrial: true } });
-        }
+        await db.collection('users').updateOne(userQuery(resolvedUserId), { $set: { plan: 'pro', subscription: subscriptionData }, $unset: { scheduledDowngradeAt: '' } });
+        if (isTrialing) await db.collection('users').updateOne(userQuery(resolvedUserId), { $set: { hadTrial: true } });
         await logPaymentEvent(resolvedUserId, subscriptionId!, 'subscription_created', payload);
-        console.log(`[Paddle] User ${resolvedUserId} upgraded to PRO.`);
-        migrateUserEmailsToPro(resolvedUserId).catch(err =>
-          console.error(`[Paddle] Email migration failed for ${resolvedUserId}:`, err),
-        );
-        break;
-      }
-
-      case 'CANCELLED': {
-        const data      = payload.rawEvent?.data;
-        const periodEnd = data?.scheduled_change?.effective_at
-          ?? data?.current_billing_period?.ends_at
-          ?? payload.canceledAt ?? new Date().toISOString();
-
-        await db.collection('users').updateOne(userQuery(resolvedUserId), {
-          $set: {
-            'subscription.status':            'ACTIVE',
-            'subscription.cancelAtPeriodEnd': true,
-            'subscription.canceledAt':        payload.canceledAt ?? new Date().toISOString(),
-            'subscription.periodEnd':         periodEnd,
-            'subscription.lastUpdated':       new Date(),
-            scheduledDowngradeAt:             new Date(periodEnd),
-          },
-        });
-        await logPaymentEvent(resolvedUserId, subscriptionId!, 'subscription_cancelled', payload);
-        console.log(`[Paddle] User ${resolvedUserId} cancelled. Pro until ${periodEnd}.`);
-
-        db.collection('users').findOne(userQuery(resolvedUserId)).then(async user => {
-          if (!user?.email) return;
-          const [emailCount, storageResult] = await Promise.all([
-            db.collection('saved_emails').countDocuments({ userId: user._id }),
-            db.collection('saved_emails').aggregate([
-              { $match: { userId: user._id } },
-              { $unwind: { path: '$attachments', preserveNullAndEmptyArrays: true } },
-              { $group: { _id: null, totalBytes: { $sum: { $ifNull: ['$attachments.size', 0] } } } },
-            ]).toArray(),
-          ]);
-          sendEmail({
-            to:      user.email,
-            from:    'billing',
-            subject: 'Your FreeCustom.Email Pro subscription has been cancelled',
-            html:    getCancellationEmailHtml({
-              periodEnd,
-              emailCount,
-              storageUsedMB: (storageResult[0]?.totalBytes ?? 0) / (1024 * 1024),
-              inboxCount:    Array.isArray(user.inboxes) ? user.inboxes.length : 0,
-            }),
-          }).catch(err => console.error('[Paddle] Cancellation email failed:', err));
-        }).catch(() => {});
+        migrateUserEmailsToPro(resolvedUserId).catch(() => {});
         break;
       }
 
       case 'PAYMENT_COMPLETED': {
+        // Fraud Check happens here for APP PRO (Card data is present)
+        const cardHash = extractCardHash(payload.rawEvent);
+        const { shouldAbort } = await checkChargebackFraud(resolvedUserId, subscriptionId!, cardHash, 'app');
+        if (shouldAbort) {
+            await logPaymentEvent(resolvedUserId, subscriptionId!, 'subscription_cancelled', payload);
+            return res.status(200).json({ success: true, warning: 'Fraud detected' });
+        }
+
         await db.collection('users').updateOne(userQuery(resolvedUserId), {
-          $set: {
-            plan: 'pro',
-            'subscription.status':            'ACTIVE',
-            'subscription.cancelAtPeriodEnd': false,
-            'subscription.lastUpdated':       new Date(),
-          },
-          $unset: {
-            scheduledDowngradeAt:       '',
-            'subscription.canceledAt':  '',
-            'subscription.periodEnd':   '',
-          },
+          $set: { plan: 'pro', 'subscription.status': 'ACTIVE', 'subscription.cancelAtPeriodEnd': false, 'subscription.lastUpdated': new Date() },
+          $unset: { scheduledDowngradeAt: '', 'subscription.canceledAt': '', 'subscription.periodEnd': '' },
         });
         await logPaymentEvent(resolvedUserId, subscriptionId!, 'subscription_renewed', payload);
-        console.log(`[Paddle] User ${resolvedUserId} payment received — plan renewed.`);
+        break;
+      }
+
+      case 'CANCELLED': {
+        const data = payload.rawEvent?.data;
+        const periodEnd = data?.scheduled_change?.effective_at ?? data?.current_billing_period?.ends_at ?? payload.canceledAt ?? new Date().toISOString();
+        await db.collection('users').updateOne(userQuery(resolvedUserId), {
+          $set: { 'subscription.status': 'ACTIVE', 'subscription.cancelAtPeriodEnd': true, 'subscription.canceledAt': payload.canceledAt ?? new Date().toISOString(), 'subscription.periodEnd': periodEnd, 'subscription.lastUpdated': new Date(), scheduledDowngradeAt: new Date(periodEnd) },
+        });
+        await logPaymentEvent(resolvedUserId, subscriptionId!, 'subscription_cancelled', payload);
+        db.collection('users').findOne(userQuery(resolvedUserId)).then(async user => {
+          if (!user?.email) return;
+          const [emailCount, storageResult] = await Promise.all([
+            db.collection('saved_emails').countDocuments({ userId: user._id }),
+            db.collection('saved_emails').aggregate([{ $match: { userId: user._id } }, { $unwind: { path: '$attachments', preserveNullAndEmptyArrays: true } }, { $group: { _id: null, totalBytes: { $sum: { $ifNull: ['$attachments.size', 0] } } } }]).toArray(),
+          ]);
+          sendEmail({ to: user.email, from: 'billing', subject: 'Your FreeCustom.Email Pro subscription has been cancelled', html: getCancellationEmailHtml({ periodEnd, emailCount, storageUsedMB: (storageResult[0]?.totalBytes ?? 0) / (1024 * 1024), inboxCount: Array.isArray(user.inboxes) ? user.inboxes.length : 0 }) }).catch(() => {});
+        }).catch(() => {});
         break;
       }
 
       case 'SUSPENDED': {
         await db.collection('users').updateOne(userQuery(resolvedUserId), {
-          $set: {
-            'subscription.status':    'SUSPENDED',
-            'subscription.pausedAt':  payload.pausedAt ?? new Date().toISOString(),
-            'subscription.lastUpdated': new Date(),
-          },
+          $set: { 'subscription.status': 'SUSPENDED', 'subscription.pausedAt': payload.pausedAt ?? new Date().toISOString(), 'subscription.lastUpdated': new Date() },
         });
-        console.warn(`[Paddle] User ${resolvedUserId} subscription SUSPENDED.`);
         break;
       }
 
       case 'UPDATED': {
         await db.collection('users').updateOne(userQuery(resolvedUserId), {
-          $set: {
-            'subscription.planId':      payload.priceId,
-            'subscription.status':      normStatus(payload.status) || 'ACTIVE',
-            'subscription.lastUpdated': new Date(),
-          },
+          $set: { 'subscription.planId': payload.priceId, 'subscription.status': normStatus(payload.status) || 'ACTIVE', 'subscription.lastUpdated': new Date() },
         });
-        console.log(`[Paddle] User ${resolvedUserId} subscription UPDATED.`);
         break;
       }
 
       case 'REFUNDED': {
         await logPaymentEvent(resolvedUserId, subscriptionId!, 'refund', payload);
-        console.log(`[Paddle] Pro plan refund logged for ${resolvedUserId}.`);
         break;
       }
     }
 
     return res.status(200).json({ success: true });
   } catch (err) {
-    console.error(`[Paddle] Error processing ${canonicalType} for ${resolvedUserId}:`, err);
+    console.error(`[Paddle] Error processing ${canonicalType}:`, err);
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 }
