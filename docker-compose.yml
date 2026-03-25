@@ -237,6 +237,27 @@ services:
       - redis
     restart: unless-stopped
 
+  trial-reminder:
+    build:
+      context: ./api
+    container_name: maildrop-trial-reminder
+    command: >
+      sh -c "
+        echo 'Trial reminder worker started';
+        node dist/workers/trial-reminder.js;
+      "
+    environment:
+      MONGO_URI: mongodb://${MONGO_USER}:${MONGO_PASS}@mongo:27017/freecustomemail?authSource=admin
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      APP_URL: https://www.freecustom.email
+      # How often to sweep — default 15m
+      TRIAL_REMINDER_INTERVAL_MS: 900000
+    depends_on:
+      - mongo
+      - redis
+    restart: unless-stopped
+
   haraka:
     build:
       context: ./smtp-fast

@@ -139,7 +139,7 @@ export interface CancellationEmailData {
 
 export function getCancellationEmailHtml(data: CancellationEmailData): string {
   const { periodEnd, emailCount, storageUsedMB, inboxCount } = data;
-  const endDate = new Date(periodEnd).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const endDate     = new Date(periodEnd).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   const storageLabel = storageUsedMB >= 1024 ? `${(storageUsedMB / 1024).toFixed(1)} GB` : `${storageUsedMB.toFixed(0)} MB`;
 
   const lossItems = [
@@ -254,7 +254,7 @@ export function getDomainRevocationEmailHtml(domain: string, txtOk: boolean, mxO
 
   const content = `
     <p style="margin:0 0 8px;font-size:20px;font-weight:600;color:#111;">Custom domain de-verified</p>
-    <p style="margin:0 0 20px;">${pill('Email delivery stopped', '#991b1b', '#fee2e2')}&nbsp;&nbsp;<span style="font-size:13px;color:#888;">Domain: <strong style="color:#111;">${domain}</strong></span></p>
+    <p style="margin:0 0 20px;">${pill('Email delivery stopped', '#991b1b', '#fee2e2')}&nbsp;&nbsp;<span style="font-size:13px;color:#888;">Domain: <strong style="color:#111;">${domain}</strong></span></span></p>
     <p style="margin:0 0 28px;font-size:14px;color:#666;line-height:1.6;">
       After multiple failed DNS checks, <strong style="color:#111;">${domain}</strong> has been
       de-verified and will <strong style="color:#111;">no longer receive emails</strong> through FreeCustom.Email.
@@ -272,7 +272,6 @@ export function getDomainRevocationEmailHtml(domain: string, txtOk: boolean, mxO
   return layout(content, "You're receiving this because you have a verified custom domain on FreeCustom.Email and we run periodic DNS health checks.");
 }
 
-// ── Account deletion (scheduled) ──────────────────────────────────────────────
 export function getDeletionScheduledEmailHtml(scheduledDeletionAt: Date, appUrl: string): string {
   const dateStr = new Date(scheduledDeletionAt).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   const content = `
@@ -289,7 +288,6 @@ export function getDeletionScheduledEmailHtml(scheduledDeletionAt: Date, appUrl:
   return layout(content, "You requested account deletion on FreeCustom.Email. This email confirms the schedule and your option to restore.");
 }
 
-// ── Account deletion (permanent) ──────────────────────────────────────────────
 export function getDeletionPermanentEmailHtml(): string {
   const content = `
     <p style="margin:0 0 8px;font-size:20px;font-weight:600;color:#111;">Account permanently deleted</p>
@@ -305,10 +303,8 @@ export function getDeletionPermanentEmailHtml(): string {
 //  DEVELOPER API TEMPLATES  (devLayout — "for developers" branding)
 // ═════════════════════════════════════════════════════════════════════════════
 
-// ── API Plan cancelled ────────────────────────────────────────────────────────
-
 export function getApiPlanCancellationEmailHtml(plan: string, periodEnd: string): string {
-  const endDate = new Date(periodEnd).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  const endDate   = new Date(periodEnd).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
   const planLabel = plan.charAt(0).toUpperCase() + plan.slice(1);
 
   const lossItems = [
@@ -345,8 +341,6 @@ export function getApiPlanCancellationEmailHtml(plan: string, periodEnd: string)
   return devLayout(content, "You're receiving this because you cancelled your API subscription on FreeCustom.Email.");
 }
 
-// ── API Plan downgraded (after grace period expires) ─────────────────────────
-
 export function getApiPlanDowngradeEmailHtml(previousPlan: string): string {
   const planLabel = previousPlan.charAt(0).toUpperCase() + previousPlan.slice(1);
 
@@ -375,21 +369,17 @@ export function getApiPlanDowngradeEmailHtml(previousPlan: string): string {
   return devLayout(content, "You're receiving this because your API subscription period ended.");
 }
 
-// ── Quota warning (80% threshold) ────────────────────────────────────────────
-
 export interface QuotaWarningData {
-  plan:               string;
-  requestsUsed:       number;
-  requestsLimit:      number;
-  percentUsed:        number;
-  creditsRemaining:   number;
-  resetsAt:           string; // ISO date string
+  plan:             string;
+  requestsUsed:     number;
+  requestsLimit:    number;
+  percentUsed:      number;
+  creditsRemaining: number;
+  resetsAt:         string;
 }
 
 export function getApiQuotaWarningEmailHtml(data: QuotaWarningData): string {
-  const {
-    plan, requestsUsed, requestsLimit, percentUsed, creditsRemaining, resetsAt,
-  } = data;
+  const { plan, requestsUsed, requestsLimit, percentUsed, creditsRemaining, resetsAt } = data;
 
   const planLabel    = plan.charAt(0).toUpperCase() + plan.slice(1);
   const resetDate    = new Date(resetsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
@@ -398,17 +388,15 @@ export function getApiQuotaWarningEmailHtml(data: QuotaWarningData): string {
   const urgencyBg    = percentUsed >= 95 ? '#fee2e2' : '#fff8ed';
   const urgencyBorder = percentUsed >= 95 ? '#fecaca' : '#fde68a';
 
-  // Progress bar width
   const barWidth = Math.min(100, Math.round(percentUsed));
   const barColor = percentUsed >= 95 ? '#ef4444' : percentUsed >= 80 ? '#f59e0b' : '#22c55e';
 
-  // Next plan upsell
   const nextPlanMap: Record<string, { name: string; rps: number; rpm: string; price: string }> = {
-    free:       { name: 'Developer', rps: 10,  rpm: '100k',  price: '$7/mo'  },
-    developer:  { name: 'Startup',   rps: 25,  rpm: '500k',  price: '$19/mo' },
-    startup:    { name: 'Growth',    rps: 50,  rpm: '2M',    price: '$49/mo' },
-    growth:     { name: 'Enterprise',rps: 100, rpm: '10M',   price: '$149/mo'},
-    enterprise: { name: '',          rps: 0,   rpm: '',      price: ''       },
+    free:       { name: 'Developer', rps: 10,  rpm: '100k',  price: '$7/mo'   },
+    developer:  { name: 'Startup',   rps: 25,  rpm: '500k',  price: '$19/mo'  },
+    startup:    { name: 'Growth',    rps: 50,  rpm: '2M',    price: '$49/mo'  },
+    growth:     { name: 'Enterprise',rps: 100, rpm: '10M',   price: '$149/mo' },
+    enterprise: { name: '',          rps: 0,   rpm: '',      price: ''        },
   };
   const next = nextPlanMap[plan.toLowerCase()];
 
@@ -439,7 +427,6 @@ export function getApiQuotaWarningEmailHtml(data: QuotaWarningData): string {
     <p style="margin:0 0 4px;font-size:20px;font-weight:600;color:#111;">You've used ${Math.round(percentUsed)}% of your monthly quota</p>
     <p style="margin:0 0 20px;">${pill(`${planLabel} plan`, '#374151', '#f3f4f6')}</p>
 
-    <!-- Progress bar -->
     <div style="background:#f0f0f0;border-radius:4px;height:8px;margin-bottom:8px;overflow:hidden;">
       <div style="background:${barColor};width:${barWidth}%;height:8px;border-radius:4px;"></div>
     </div>
@@ -469,8 +456,6 @@ export function getApiQuotaWarningEmailHtml(data: QuotaWarningData): string {
   return devLayout(content, `You're receiving this because your API account (${planLabel} plan) has reached ${Math.round(percentUsed)}% of its monthly quota.`);
 }
 
-// ── Quota exhausted (100%) ────────────────────────────────────────────────────
-
 export function getApiQuotaExhaustedEmailHtml(plan: string, resetsAt: string, creditsRemaining: number): string {
   const planLabel = plan.charAt(0).toUpperCase() + plan.slice(1);
   const resetDate = new Date(resetsAt).toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
@@ -496,4 +481,262 @@ export function getApiQuotaExhaustedEmailHtml(plan: string, resetsAt: string, cr
     </p>`;
 
   return devLayout(content, `You're receiving this because your ${planLabel} API plan quota was exhausted.`);
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  TRIAL REMINDER TEMPLATES
+// ═════════════════════════════════════════════════════════════════════════════
+
+export interface TrialReminderData {
+  hoursUntilEnd: number;  // 24 | 3  (drives copy tone)
+  chargesAt:     string;  // ISO date — when first payment fires
+  planName:      string;  // "Pro"
+  pricingUrl?:   string;
+  dashboardUrl?: string;
+}
+
+/**
+ * App Pro trial ending reminder.
+ * Sent 24h and 3h before the first charge.
+ */
+export function getTrialEndingEmailHtml(data: TrialReminderData): string {
+  const { hoursUntilEnd, chargesAt, planName } = data;
+
+  const chargeDate = new Date(chargesAt).toLocaleDateString('en-US', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
+  const chargeTime = new Date(chargesAt).toLocaleTimeString('en-US', {
+    hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+  });
+
+  const isUrgent  = hoursUntilEnd <= 4;
+  const timeLabel = isUrgent ? `${hoursUntilEnd} hours` : 'tomorrow';
+  const badgeText = isUrgent ? `${hoursUntilEnd}h left` : '24h left';
+  const badgeColor = isUrgent ? '#991b1b' : '#92400e';
+  const badgeBg    = isUrgent ? '#fee2e2' : '#fff8ed';
+
+  const proFeatures = [
+    'Emails stored forever — never expire',
+    'All inboxes active simultaneously',
+    'Custom domain email routing',
+    'OTP and magic link instant detection',
+    'Priority support',
+  ].map(f => `<tr>
+    <td style="padding:5px 0;font-size:13px;color:#166534;vertical-align:top;width:18px;">✓</td>
+    <td style="padding:5px 0;font-size:13px;color:#444;line-height:1.5;">${f}</td>
+  </tr>`).join('');
+
+  const content = `
+    <p style="margin:0 0 8px;font-size:20px;font-weight:600;color:#111;">Your free trial ends ${timeLabel}</p>
+    <p style="margin:0 0 20px;">${pill(badgeText, badgeColor, badgeBg)}</p>
+
+    <p style="margin:0 0 24px;font-size:14px;color:#666;line-height:1.6;">
+      Your <strong style="color:#111;">${planName}</strong> trial is coming to an end. 
+      Your first payment will be charged on <strong style="color:#111;">${chargeDate}</strong> at ${chargeTime}.
+      No action needed — your subscription continues automatically.
+    </p>
+
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:20px 24px;margin-bottom:28px;">
+      <p style="margin:0 0 12px;font-size:13px;font-weight:600;color:#166534;">Everything you keep with ${planName}</p>
+      <table width="100%" cellpadding="0" cellspacing="0">${proFeatures}</table>
+    </div>
+
+    <p style="margin:0 0 20px;font-size:14px;color:#444;line-height:1.6;">
+      Want to cancel before being charged? You can do so from your billing dashboard at any time. 
+      If you cancel, you'll keep Pro access until ${chargeDate}.
+    </p>
+
+    ${ctaButton(`${APP_URL}/dashboard/billing`, 'Manage subscription')}
+    &nbsp;&nbsp;
+    ${ctaButton(`${APP_URL}/pricing`, 'View plan details', 'outline')}
+
+    <p style="margin:32px 0 0;font-size:12px;color:#999;line-height:1.6;">
+      Questions about billing? Just reply to this email — we're happy to help.
+    </p>`;
+
+  return layout(
+    content,
+    `You're receiving this because your FreeCustom.Email ${planName} free trial is ending ${timeLabel}.`,
+  );
+}
+
+/**
+ * Developer API plan trial ending reminder.
+ * Sent 24h and 3h before the first charge.
+ */
+export interface ApiTrialReminderData extends TrialReminderData {
+  apiPlan:          string;   // "developer" | "startup" | etc.
+  rateLimit:        string;   // e.g. "10 req/s"
+  monthlyLimit:     string;   // e.g. "100,000 req/month"
+}
+
+export function getApiTrialEndingEmailHtml(data: ApiTrialReminderData): string {
+  const { hoursUntilEnd, chargesAt, apiPlan, rateLimit, monthlyLimit } = data;
+
+  const planLabel  = apiPlan.charAt(0).toUpperCase() + apiPlan.slice(1);
+  const chargeDate = new Date(chargesAt).toLocaleDateString('en-US', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
+  const chargeTime = new Date(chargesAt).toLocaleTimeString('en-US', {
+    hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+  });
+
+  const isUrgent   = hoursUntilEnd <= 4;
+  const timeLabel  = isUrgent ? `${hoursUntilEnd} hours` : 'tomorrow';
+  const badgeText  = isUrgent ? `${hoursUntilEnd}h left` : '24h left';
+  const badgeColor = isUrgent ? '#991b1b' : '#92400e';
+  const badgeBg    = isUrgent ? '#fee2e2' : '#fff8ed';
+
+  const planFeatures = [
+    `<strong>${monthlyLimit}</strong> per month`,
+    `<strong>${rateLimit}</strong> burst rate`,
+    'OTP extraction endpoint',
+    'WebSocket live delivery',
+    'Custom domain inboxes',
+    'Credits never expire if you add them',
+  ].map(f => `<tr>
+    <td style="padding:5px 0;font-size:13px;color:#1e40af;vertical-align:top;width:18px;">✓</td>
+    <td style="padding:5px 0;font-size:13px;color:#444;line-height:1.5;">${f}</td>
+  </tr>`).join('');
+
+  const content = `
+    <p style="margin:0 0 8px;font-size:20px;font-weight:600;color:#111;">Your API trial ends ${timeLabel}</p>
+    <p style="margin:0 0 20px;">
+      ${pill(badgeText, badgeColor, badgeBg)}
+      &nbsp;
+      ${pill(planLabel + ' plan', '#1e3a5f', '#dbeafe')}
+    </p>
+
+    <p style="margin:0 0 24px;font-size:14px;color:#666;line-height:1.6;">
+      Your <strong style="color:#111;">${planLabel}</strong> API trial is almost over.
+      Your first payment will be charged on <strong style="color:#111;">${chargeDate}</strong> at ${chargeTime}.
+      Your integration keeps working seamlessly — no changes needed on your end.
+    </p>
+
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:20px 24px;margin-bottom:28px;">
+      <p style="margin:0 0 12px;font-size:13px;font-weight:600;color:#1e40af;">What you keep with ${planLabel}</p>
+      <table width="100%" cellpadding="0" cellspacing="0">${planFeatures}</table>
+    </div>
+
+    <div style="background:#f9f9f9;border-radius:6px;padding:16px 20px;margin-bottom:24px;">
+      <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:0.5px;">If you cancel before ${chargeDate}</p>
+      <p style="margin:0;font-size:13px;color:#666;line-height:1.5;">
+        Your plan reverts to the Free tier (5,000 req/month, 1 req/s). 
+        Your API inboxes stay registered and any credits you've purchased never expire.
+      </p>
+    </div>
+
+    ${ctaButton(`${APP_URL}/dashboard/api/billing`, 'Manage API subscription')}
+    &nbsp;&nbsp;
+    ${ctaButton(`${APP_URL}/api/pricing`, 'Compare plans', 'outline')}
+
+    <p style="margin:32px 0 0;font-size:12px;color:#999;line-height:1.6;">
+      Questions? Reply to this email or check the
+      <a href="${APP_URL}/docs" style="color:#999;">API docs</a>.
+    </p>`;
+
+  return devLayout(
+    content,
+    `You're receiving this because your FreeCustom.Email ${planLabel} API trial is ending ${timeLabel}.`,
+  );
+}
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  CHARGEBACK / FRAUD TEMPLATES
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * First-offence chargeback warning.
+ * Sent to both the new account and the older account when duplicate
+ * fingerprint + card combination is detected.
+ * The new subscription is cancelled immediately.
+ */
+export function getChargebackWarningEmailHtml(): string {
+  const content = `
+    <p style="margin:0 0 8px;font-size:20px;font-weight:600;color:#111;">Suspicious payment activity detected</p>
+    <p style="margin:0 0 20px;">
+      ${pill('Fraud warning', '#92400e', '#fef3c7')}
+    </p>
+
+    <p style="margin:0 0 20px;font-size:14px;color:#666;line-height:1.6;">
+      We detected a payment from a card that has already been used to subscribe to FreeCustom.Email 
+      from the same device. To protect all users, <strong style="color:#111;">the new subscription has been 
+      cancelled immediately</strong> and a refund will be issued within 5–10 business days.
+    </p>
+
+    <div style="background:#fff8ed;border:1px solid #fde68a;border-radius:6px;padding:20px 24px;margin-bottom:24px;">
+      <p style="margin:0 0 10px;font-size:13px;font-weight:600;color:#92400e;">This is a formal warning</p>
+      <p style="margin:0;font-size:13px;color:#92400e;line-height:1.6;">
+        Creating multiple accounts to claim repeated free trials or circumvent billing is a violation 
+        of our Terms of Service. Any further attempts from this device or card will result in a 
+        <strong>permanent ban</strong> on all associated accounts with no refund.
+      </p>
+    </div>
+
+    <p style="margin:0 0 24px;font-size:14px;color:#444;line-height:1.6;">
+      If you believe this is a mistake — for example, a family member or colleague shares this device — 
+      please contact us and we'll investigate promptly.
+    </p>
+
+    ${ctaButton('mailto:support@freecustom.email?subject=Chargeback%20warning%20appeal', 'Contact support to appeal')}
+
+    <p style="margin:32px 0 0;font-size:12px;color:#999;line-height:1.6;">
+      Your existing account and any prior paid access are unaffected.
+    </p>`;
+
+  return layout(
+    content,
+    "You're receiving this because our fraud detection system flagged payment activity on your account.",
+  );
+}
+
+/**
+ * Permanent ban email.
+ * Sent when a repeat chargeback / multi-account fraud attempt is detected.
+ * Both accounts are banned and all active subscriptions are cancelled.
+ */
+export function getChargebackBanEmailHtml(): string {
+  const content = `
+    <p style="margin:0 0 8px;font-size:20px;font-weight:600;color:#111;">Your account has been permanently banned</p>
+    <p style="margin:0 0 20px;">
+      ${pill('Account banned', '#991b1b', '#fee2e2')}
+    </p>
+
+    <p style="margin:0 0 20px;font-size:14px;color:#666;line-height:1.6;">
+      Following a previous warning, our system detected another attempt to use multiple accounts with the 
+      same payment card and device fingerprint. This is a repeat violation of our Terms of Service.
+    </p>
+
+    <div style="background:#fff5f5;border:1px solid #fecaca;border-radius:6px;padding:20px 24px;margin-bottom:24px;">
+      <p style="margin:0 0 10px;font-size:13px;font-weight:600;color:#991b1b;">What this means</p>
+      <table width="100%" cellpadding="0" cellspacing="0">
+        ${[
+          'All associated accounts have been permanently banned',
+          'All active subscriptions have been cancelled immediately',
+          'Refunds are not issued for abuse-related cancellations',
+          'New accounts from the same device or card will be blocked',
+        ].map(i => `<tr>
+          <td style="padding:4px 0;font-size:13px;color:#991b1b;vertical-align:top;width:16px;">·</td>
+          <td style="padding:4px 0;font-size:13px;color:#991b1b;line-height:1.5;">${i}</td>
+        </tr>`).join('')}
+      </table>
+    </div>
+
+    <p style="margin:0 0 24px;font-size:14px;color:#444;line-height:1.6;">
+      If you believe this ban was applied in error, you may submit an appeal. Appeals are reviewed 
+      within 5 business days. Include your account email and a clear explanation of the situation.
+    </p>
+
+    ${ctaButton('mailto:support@freecustom.email?subject=Ban%20appeal', 'Submit an appeal')}
+
+    <p style="margin:32px 0 0;font-size:12px;color:#999;line-height:1.6;">
+      This decision was made automatically by our fraud detection system and reviewed by our team.
+    </p>`;
+
+  return layout(
+    content,
+    "You're receiving this because our fraud detection system has permanently banned your account for repeated policy violations.",
+  );
 }

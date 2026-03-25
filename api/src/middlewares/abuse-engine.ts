@@ -20,29 +20,44 @@ declare global {
   }
 }
 
+// ── Path classification ───────────────────────────────────────────────────────
+//
+// Friction and fingerprint-usage recording ONLY apply to public-facing API
+// paths where free-tier abuse actually happens.
+//
+// Management paths (/user/*, /auth/*, /paddle/*, /health) are called by our
+// own frontend via the internal API key + HMAC signature.  They are already
+// protected at the transport layer; adding fingerprint friction to them
+// causes legitimate free users and "power users" to hit rate-limits just
+// from normal dashboard usage (page loads, settings fetches, etc.).
+//
+// Public API paths that should have friction:
+//   /v1/*       — developer REST API  (NOTE: these go through createPublicV1Router,
+//                  which does NOT include internalApiAuth, so this middleware only
+//                  applies to /mailbox/* currently — but the check is future-proof)
+//   /mailbox/*  — real-time mailbox reads
+
+function isPublicApiPath(req: Request): boolean {
+  const path = req.path || '';
+  return (
+    path.startsWith('/v1/') ||
+    path === '/v1' ||
+    path.startsWith('/mailbox/')
+  );
+}
+
 /**
  * Extracts the real client IP from the request.
  *
  * Priority order:
- *   1. x-fp header — if the frontend already computed and signed a fingerprint,
- *      trust it (the HMAC signature on the internal request already vouches for it).
- *   2. cf-connecting-ip — Cloudflare's header for the real end-user IP.
- *      This is what the Next.js frontend uses when building the fingerprint,
- *      so we must use the same value to get a matching hash.
- *   3. x-forwarded-for first entry — set by nginx/proxies.
- *   4. req.ip — Express's resolved IP, which behind multiple Docker containers
- *      resolves to the gateway's internal IP (useless for fingerprinting).
- *
- * We intentionally do NOT use req.ip as a primary source because the stack is:
- *   Browser → Cloudflare → nginx → api-gateway → api-free/api-pro
- * By the time the request reaches the backend, req.ip is the gateway container IP.
+ *   1. cf-connecting-ip — Cloudflare's header for the real end-user IP.
+ *   2. x-forwarded-for first entry — set by nginx/proxies.
+ *   3. req.ip — Express's resolved IP (useless behind multiple containers).
  */
 export function getRealIp(req: Request): string {
-  // If frontend forwarded the real IP explicitly, use it
   const cfIp = req.headers['cf-connecting-ip'];
   if (cfIp && typeof cfIp === 'string') return cfIp.trim();
 
-  // x-forwarded-for may be a comma-separated list; first entry is the client
   const xff = req.headers['x-forwarded-for'];
   if (xff) {
     const first = (typeof xff === 'string' ? xff : xff[0]).split(',')[0].trim();
@@ -53,18 +68,15 @@ export function getRealIp(req: Request): string {
 }
 
 /**
- * Computes a fingerprint matching the one built by the Next.js frontend in lib/api.ts.
+ * Computes a fingerprint matching the one built by the Next.js frontend.
  *
  * Frontend formula (lib/api.ts):
  *   fpString = `${cookieId}|${ipPrefix}|${ua}|${tz}|${lang}`
  *   fp = sha256(fpString)
  *
- * We replicate the same /24 IP masking and field order here.
- * If x-fp is provided (pre-computed by the frontend) we trust it directly,
- * since the request is already HMAC-signed — there's no spoofing risk.
+ * If x-fp is provided (pre-computed by the frontend) we trust it directly.
  */
 export function getFingerprint(req: Request): string {
-  // Trust pre-computed fingerprint from signed internal requests
   const providedFp = req.header('x-fp');
   if (providedFp) return providedFp;
 
@@ -74,10 +86,8 @@ export function getFingerprint(req: Request): string {
   let ipPrefix = 'unknown-ip';
   if (rawIp !== 'unknown-ip') {
     if (rawIp.includes('.')) {
-      // IPv4 → /24 subnet
       ipPrefix = rawIp.split('.').slice(0, 3).join('.') + '.0';
     } else if (rawIp.includes(':')) {
-      // IPv6 → first 3 groups
       ipPrefix = rawIp.split(':').slice(0, 3).join(':') + '::';
     }
   }
@@ -93,8 +103,15 @@ export function getFingerprint(req: Request): string {
 
 /**
  * Middleware: Identity Layer
+ *
  * Attaches user context and fingerprint to the request.
- * Does NOT record usage for paid users — they must never affect free-tier counters.
+ *
+ * Fingerprint USAGE (Redis counters) is only recorded for:
+ *   - free / anonymous plans
+ *   - public API paths (/v1/*, /mailbox/*)
+ *
+ * Management paths (/user/*, /auth/*, etc.) are NEVER recorded so that
+ * normal dashboard activity doesn't inflate abuse counters.
  */
 export const attachIdentityContext = (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -103,16 +120,17 @@ export const attachIdentityContext = (req: Request, res: Response, next: NextFun
     const userId      = req.header('x-user-id') || null;
     const cookieId    = req.header('x-cookie-id') || 'no-cookie';
 
-    // Plan is injected by the gateway as x-derived-plan (never trust client x-plan)
     const plan = req.header('x-derived-plan') || req.header('x-plan') || 'free';
 
     req.userContext = { userId, fingerprint, ip, plan };
 
-    // FIX: Only record fingerprint usage for free/anonymous users.
-    // Pro users must NEVER increment shared abuse counters — a single pro user
-    // making normal requests was pushing the counter past friction thresholds
-    // for everyone sharing the same (incorrectly computed) fingerprint bucket.
-    if (plan === 'free' || plan === 'anonymous') {
+    // Only record fingerprint usage for free/anonymous users on public API paths.
+    // Never record for management paths — dashboard calls must never consume
+    // abuse counters shared with real API traffic.
+    if (
+      (plan === 'free' || plan === 'anonymous') &&
+      isPublicApiPath(req)
+    ) {
       recordFingerprintUsage(fingerprint, userId, ip, cookieId).catch(err => {
         logCriticalError(err, req, { context: 'recordFingerprintUsage' });
       });
@@ -126,7 +144,7 @@ export const attachIdentityContext = (req: Request, res: Response, next: NextFun
 };
 
 /**
- * Record fingerprint usage in Redis (free/anonymous users only).
+ * Record fingerprint usage in Redis (public API + free/anonymous only).
  */
 export async function recordFingerprintUsage(
   fingerprint: string,
@@ -141,14 +159,12 @@ export async function recordFingerprintUsage(
   await redis.incr(monthKey);
   await redis.expire(monthKey, 30 * 24 * 60 * 60); // 30 days
 
-  // Track IP → CookieId churn (detect bot farms spinning up new sessions on same IP)
   if (ip && cookieId !== 'no-cookie') {
     const ipCookieKey = `abuse:ip_cookies:${ip}:${hourStr}`;
     await redis.sAdd(ipCookieKey, cookieId);
     await redis.expire(ipCookieKey, 2 * 60 * 60);
   }
 
-  // Track CookieId → IP churn (detect proxy rotation on same session)
   if (cookieId !== 'no-cookie' && ip) {
     const cookieIpKey = `abuse:cookie_ips:${cookieId}:${hourStr}`;
     await redis.sAdd(cookieIpKey, ip);
@@ -164,8 +180,14 @@ export async function recordFingerprintUsage(
 
 /**
  * Middleware: Progressive Friction Engine
- * Free/anonymous users only — paid users are completely bypassed.
- * Applies randomized logarithmic delays and hard blocks for extreme abuse signals.
+ *
+ * ONLY applied when BOTH conditions are true:
+ *   1. The plan is free or anonymous
+ *   2. The path is a public API path (/v1/*, /mailbox/*)
+ *
+ * Management paths (/user/*, /auth/*, /paddle/*, etc.) are completely
+ * bypassed — internal dashboard calls must never be throttled by this engine.
+ * Paid users are also completely bypassed.
  */
 export const progressiveFrictionEngine = async (
   req: Request,
@@ -175,11 +197,15 @@ export const progressiveFrictionEngine = async (
   if (process.env.DISABLE_ABUSE_ENGINE === 'true') return next();
   if (!req.userContext) return next();
 
-  // FIX: Exit immediately for any paid plan — no Redis round-trips at all.
-  // This check now also covers 'pro', 'developer', 'startup', 'growth', 'enterprise'
-  // in addition to the original 'free'/'anonymous' check.
+  // ── Gate 1: paid users — instant exit, no Redis round-trips ──────────────
   const { plan } = req.userContext;
   if (plan !== 'free' && plan !== 'anonymous') return next();
+
+  // ── Gate 2: management / internal paths — never throttle ─────────────────
+  // Management paths are signed internal calls from our own frontend.
+  // They are already protected by x-internal-api-key + HMAC; adding
+  // fingerprint friction here blocks legitimate free-plan dashboard usage.
+  if (!isPublicApiPath(req)) return next();
 
   const { fingerprint, ip } = req.userContext;
   const cookieId  = req.header('x-cookie-id') || 'no-cookie';

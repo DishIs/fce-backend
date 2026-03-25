@@ -25,11 +25,10 @@ export async function connectToMongo() {
     await db.collection('users').createIndex({ wyiUserId: 1 }, { unique: true });
     await db.collection('users').createIndex({ "customDomains.domain": 1 });
     await db.collection('saved_emails').createIndex({ userId: 1, mailbox: 1 });
-    // Index for subscription lookups
     await db.collection('users').createIndex({ "subscription.subscriptionId": 1 });
     await db.collection('payment_logs').createIndex({ userId: 1 });
     await db.collection('users').createIndex({ linkedProviderIds: 1 });
-    await db.collection('users').createIndex({ email: 1 });    // for email lookup
+    await db.collection('users').createIndex({ email: 1 });
 
     await db.collection('api_keys').createIndex({ keyHash: 1 }, { unique: true });
     await db.collection('api_keys').createIndex({ wyiUserId: 1 });
@@ -37,6 +36,17 @@ export async function connectToMongo() {
     await db.collection('users').createIndex({ scheduledDeletionAt: 1, deletionStatus: 1 });
     await db.collection('deletion_cooldowns').createIndex({ type: 1, value: 1 }, { unique: true });
     await db.collection('deletion_cooldowns').createIndex({ blockedUntil: 1 });
+
+    // Indexes for new features
+    await db.collection('users').createIndex({ fingerprints: 1 });         // trial abuse / chargeback lookup
+    await db.collection('users').createIndex({ cardFingerprints: 1 });      // chargeback card lookup
+    await db.collection('users').createIndex({ banStatus: 1 });             // admin queries
+    await db.collection('users').createIndex(                               // trial reminder sweep
+      { 'subscription.status': 1, 'subscription.nextBilledAt': 1 },
+    );
+    await db.collection('users').createIndex(
+      { 'apiSubscription.status': 1, 'apiSubscription.nextBilledAt': 1 },
+    );
 
     return { db, gfs };
   } catch (error) {
@@ -47,7 +57,9 @@ export async function connectToMongo() {
 
 export { db, gfs };
 
-// --- Interfaces ---
+// ─────────────────────────────────────────────────────────────────────────────
+//  Interfaces
+// ─────────────────────────────────────────────────────────────────────────────
 
 export interface IUserSettings {
   theme?: 'light' | 'dark' | 'system';
@@ -56,7 +68,6 @@ export interface IUserSettings {
   layout?: string;
   smartOtp?: boolean;
   shortcuts?: Record<string, string>;
-  // Allow flexibility for future frontend settings
   [key: string]: any;
 }
 
@@ -73,22 +84,16 @@ export interface ISubscription {
   // 'EXPIRED'  — edge case (manual or PayPal)
   status: 'TRIALING' | 'ACTIVE' | 'SUSPENDED' | 'CANCELLED' | 'EXPIRED' | 'APPROVAL_PENDING';
 
-  // ── Cancellation state ──────────────────────────────────────────────────
-  // cancelAtPeriodEnd: true while the sub is cancelled but still within the
-  // paid period. UI shows "Cancels on <periodEnd>" instead of a CANCELLED badge.
-  // The expiry worker sets status → CANCELLED once periodEnd has passed.
   cancelAtPeriodEnd?: boolean;
-  periodEnd?: string;   // ISO — when current paid period ends
-  canceledAt?: string;   // ISO — when user clicked cancel
+  periodEnd?: string;
+  canceledAt?: string;
 
-  // ── Common fields ────────────────────────────────────────────────────────
   startTime: string;
   payerEmail?: string;
   payerName?: string;
   lastUpdated: Date;
 
-  // ── Paddle-specific ──────────────────────────────────────────────────────
-  customerId?: string;   // ctm_xxx — needed for portal sessions
+  customerId?: string;
   nextBilledAt?: string;
   scheduledChange?: any;
   pausedAt?: string;
@@ -96,32 +101,28 @@ export interface ISubscription {
 
 export interface IPaymentLog {
   _id?: any;
-  userId: string; // wyiUserId
+  userId: string;
   transactionType: 'subscription_created' | 'subscription_renewed' | 'subscription_cancelled' | 'refund';
   provider: string;
   subscriptionId: string;
   amount?: string;
   currency?: string;
-  details: any; // Full payload from provider
+  details: any;
   createdAt: Date;
 }
 
 export interface IUser {
   _id?: any;
-  wyiUserId: string; // Used as the primary lookup ID (Legacy/Auth ID)
+  wyiUserId: string;
   email: string;
   name: string;
   plan: 'free' | 'pro';
   lastLoginAt?: Date;
   createdAt?: Date;
 
-  // Settings
   settings?: IUserSettings;
-
-  // Billing (Local source of truth)
   subscription?: ISubscription;
 
-  // Features
   customDomains: {
     domain: string;
     verified: boolean;
@@ -131,31 +132,55 @@ export interface IUser {
   mutedSenders: string[];
   inboxes?: string[];
   inboxNotes?: Array<{
-    inbox: string;   // full address, e.g. "abc@ditube.info"
-    note:  string;   // plain-text note, already length-capped by the handler
+    inbox: string;
+    note: string;
   }>;
 
   inboxHistory?: string[];
-  hadTrial?: boolean
+  hadTrial?: boolean;
 
-  // ── Developer API (v1) — NEW ──────────────────────────────────────────────
+  // ── Developer API (v1) ────────────────────────────────────────────────────
   apiPlan?: 'free' | 'developer' | 'startup' | 'growth' | 'enterprise';
-  apiCredits?: number;   // never-expiring request credits
-  apiInboxes?: string[]; // inboxes registered via POST /v1/inboxes
+  apiCredits?: number;
+  apiInboxes?: string[];
+  apiSubscription?: ISubscription;
+  hadApiTrial?: boolean;
   fcmToken?: string;
 
-  // ── Account deletion (soft delete → permanent by worker) ────────────────────
+  // ── Account deletion ──────────────────────────────────────────────────────
   deletionStatus?: 'none' | 'scheduled' | 'permanent';
   deletionRequestedAt?: Date;
-  scheduledDeletionAt?: Date;   // cooldown end: after this, worker deletes permanently
-  ipAtDeletionRequest?: string; // for 24h IP cooldown after permanent delete
+  scheduledDeletionAt?: Date;
+  ipAtDeletionRequest?: string;
+
+  // ── Abuse / Fingerprinting ─────────────────────────────────────────────────
+  // All device fingerprints ever associated with this account.
+  // Used for:
+  //   1. Free-trial abuse: new accounts on same fingerprint inherit hadTrial
+  //   2. Chargeback detection: cross-reference with cardFingerprints
+  fingerprints?: string[];
+
+  // SHA-256 hashes of payment card (last4 + expMonth + expYear).
+  // Stored on first subscription activation and checked on every subsequent one.
+  cardFingerprints?: string[];
+
+  // ── Ban system ────────────────────────────────────────────────────────────
+  banStatus?: 'none' | 'warned' | 'banned';
+  banReason?: string;
+  banAt?: Date;
+  chargebackOffenses?: number; // incremented on each detected chargeback attempt
+
+  // ── Trial reminder flags (dedupe so we never send twice) ──────────────────
+  trialReminderSent24h?: boolean;
+  trialReminderSent3h?: boolean;
+  apiTrialReminderSent24h?: boolean;
+  apiTrialReminderSent3h?: boolean;
 }
 
-/** Cooldown after account deletion: email cannot re-register for 7–14 days, IP for 24h */
 export interface IDeletionCooldown {
   _id?: any;
   type: 'email' | 'ip';
-  value: string;        // normalized email or IP
+  value: string;
   blockedUntil: Date;
   createdAt?: Date;
 }
@@ -172,10 +197,10 @@ export interface ISavedEmail {
 
 export interface IApiKey {
   _id?: any;
-  wyiUserId: string;           // owner (canonical wyiUserId)
-  keyHash: string;           // SHA-256 of the raw key — NEVER store raw
-  keyPrefix: string;           // first 12 chars (e.g. "fce_a1b2c3d4") — safe to display
-  name: string;           // user-assigned label
+  wyiUserId: string;
+  keyHash: string;
+  keyPrefix: string;
+  name: string;
   active: boolean;
   createdAt: Date;
   lastUsedAt: Date | null;
