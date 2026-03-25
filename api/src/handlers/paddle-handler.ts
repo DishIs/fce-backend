@@ -29,6 +29,41 @@ import { client as redis } from '../config/redis';
 import { cancelPaddleSubscription } from '../utils/paddle-api';
 
 
+// ── Access Revocation (Cleanup on Ban) ───────────────────────────────────────
+//
+// When a user is permanently banned (e.g. for repeat fraud), we must:
+// 1. Mark all their API keys as inactive
+// 2. Clear API key cache in Redis
+// 3. Deactivate any custom webhooks they've registered
+// 4. Clear any active sessions (handled by frontend, but we signal status)
+//
+async function revokeUserAccess(userId: string) {
+  try {
+    // 1. Revoke all API keys
+    const keys = await db.collection('api_keys').find({ wyiUserId: userId, active: true }).toArray();
+    await db.collection('api_keys').updateMany(
+      { wyiUserId: userId, active: true },
+      { $set: { active: false, revokedAt: new Date(), revokeReason: 'Account Banned' } },
+    );
+
+    // 2. Clear API key cache in Redis
+    for (const k of keys) {
+      await redis.del(`api_key_cache:${k.keyHash}`);
+    }
+
+    // 3. Deactivate all custom webhooks (Make/Zapier/REST-hooks)
+    await db.collection('webhooks').updateMany(
+      { wyiUserId: userId, active: true },
+      { $set: { active: false, deactivatedAt: new Date(), deactivationReason: 'Account Banned' } },
+    );
+
+    console.log(`[revokeAccess] Revoked ${keys.length} API keys and all webhooks for banned user ${userId}`);
+  } catch (err) {
+    console.error(`[revokeAccess] Failed to fully revoke access for ${userId}:`, err);
+  }
+}
+
+
 type PaddleEventType =
   | 'subscription.created' | 'subscription.updated' | 'subscription.activated'
   | 'subscription.past_due' | 'subscription.canceled' | 'subscription.paused' | 'subscription.resumed'
@@ -120,6 +155,18 @@ function extractCardHash(rawEvent: any): string | null {
 }
 
 // ── Chargeback / multi-account fraud detection ────────────────────────────────
+//
+// Logic for banning/warning:
+// 1. If multiple accounts share a payment card AND a device fingerprint:
+//    - Trialing/First subscription -> WARN and CANCEL (prevents trial abuse)
+//    - Second offence -> BAN (repeat trial/payment abuse)
+//
+// To prevent banning legit users (false positives):
+// - We require BOTH card hash AND device fingerprint match.
+// - We do NOT ban on the first detection, only warn/cancel.
+// - Shared devices in a household with different cards are SAFE.
+// - Same card on different devices (e.g. spouse) is SAFE.
+//
 async function checkChargebackFraud(
   userId:         string,
   subscriptionId: string,
@@ -132,25 +179,27 @@ async function checkChargebackFraud(
   if (!user) return { fraudDetected: false, shouldAbort: false };
 
   const userFingerprints: string[] = user.fingerprints ?? [];
+  
+  // Store the card hash on the user record always
+  await db.collection('users').updateOne(
+    { _id: user._id },
+    { $addToSet: { cardFingerprints: cardHash } },
+  );
+
   if (userFingerprints.length === 0) {
-    await db.collection('users').updateOne(
-      { _id: user._id },
-      { $addToSet: { cardFingerprints: cardHash } },
-    );
     return { fraudDetected: false, shouldAbort: false };
   }
 
+  // Find any OTHER user who shares ≥1 fingerprint AND the same card
+  // AND is not already banned (no need to double-ban)
   const abuser = await db.collection('users').findOne({
     _id:              { $ne: user._id },
     fingerprints:     { $in: userFingerprints },
     cardFingerprints: cardHash,
+    banStatus:        { $ne: 'banned' },
   });
 
   if (!abuser) {
-    await db.collection('users').updateOne(
-      { _id: user._id },
-      { $addToSet: { cardFingerprints: cardHash } },
-    );
     return { fraudDetected: false, shouldAbort: false };
   }
 
@@ -179,6 +228,14 @@ async function checkChargebackFraud(
       $addToSet: { cardFingerprints: cardHash },
     },
   );
+
+  // If permanent ban — revoke API keys, webhooks, etc.
+  if (isPermanentBan) {
+    await Promise.all([
+      revokeUserAccess(userId),
+      revokeUserAccess(abuser.wyiUserId),
+    ]);
+  }
 
   try {
     await cancelPaddleSubscription(subscriptionId);
