@@ -98,8 +98,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.50"
-          memory: 512M
+          cpus: "1.00"
+          memory: 1024M
+        reservations:
+          memory: 256M
     restart: unless-stopped
 
   api-pro:
@@ -128,8 +130,10 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "2.00"
-          memory: 2G
+          cpus: "2.50"
+          memory: 2560M
+        reservations:
+          memory: 1024M
     restart: unless-stopped
 
   cleanup:
@@ -272,6 +276,10 @@ services:
     ports:
       - "27017:27017"
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
     volumes:
       - maildrop_mongo_data:/data/db
 
