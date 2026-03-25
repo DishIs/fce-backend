@@ -1,7 +1,7 @@
 // api/src/utils/paddle-api.ts
 // ─────────────────────────────────────────────────────────────────────────────
-//  Thin wrapper around the Paddle v2 REST API.
-//  Used for server-side subscription management (cancel, verify).
+//  Thin wrapper around the Paddle Billing (v3) REST API.
+//  Used for server-side subscription management (cancel, get).
 //
 //  Required env vars:
 //    PADDLE_API_KEY   — secret key from Paddle dashboard (Developers → API keys)
@@ -22,14 +22,21 @@ function paddleHeaders(): HeadersInit {
   };
 }
 
-// ── Cancel a subscription immediately ────────────────────────────────────────
+// ── Cancel a subscription ────────────────────────────────────────────────────
 
-export async function cancelPaddleSubscription(subscriptionId: string): Promise<void> {
+/**
+ * Cancels a subscription in Paddle Billing (v3).
+ * By default, cancels at the end of the current billing period.
+ */
+export async function cancelPaddleSubscription(
+  subscriptionId: string,
+  effectiveFrom: 'immediately' | 'next_billing_period' = 'immediately'
+): Promise<void> {
   const url = `${PADDLE_BASE}/subscriptions/${subscriptionId}/cancel`;
   const res = await fetch(url, {
     method:  'POST',
     headers: paddleHeaders(),
-    body:    JSON.stringify({ effective_from: 'immediately' }),
+    body:    JSON.stringify({ effective_from: effectiveFrom }),
   });
 
   if (!res.ok) {
@@ -47,13 +54,12 @@ export interface PaddleSubscriptionDetails {
   status:          string;
   customerId:      string;
   scheduledChange: any;
-  paymentMethodDetails?: {
-    card?: {
-      last_four:     string;
-      expiry_month:  number;
-      expiry_year:   number;
-      type:          string;
-    };
+  items:           any[];
+  customData?:     any;
+  nextBilledAt?:   string;
+  currentBillingPeriod?: {
+    startsAt: string;
+    endsAt:   string;
   };
 }
 

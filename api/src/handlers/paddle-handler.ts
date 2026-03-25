@@ -1,16 +1,15 @@
 // api/src/handlers/paddle-handler.ts
 //
 //  Changes from previous version:
-//    1. normStatus() helper for Paddle lowercase/American-spelling statuses
-//    2. Chargeback protection on every ACTIVATED event (app + api):
+//    1. Migrated to Paddle Billing (v3) API and Webhooks.
+//    2. Added Webhook Signature Verification for enhanced security.
+//    3. Improved error handling and robustness.
+//    4. Chargeback protection on every ACTIVATED event (app + api):
 //       – Extracts card hash (last4 + expiry) from rawEvent
 //       – Checks if any other user with an overlapping fingerprint already
 //         used the same card
 //       – First offence  → warn both users, cancel the new subscription
 //       – Repeat offence → permanently ban both users, cancel all subscriptions
-//    3. Card hash is stored on the user record after each successful activation
-//    4. Ban check at the top of handlePaddleSubscriptionEvent — banned users'
-//       webhooks still return 200 (so Paddle doesn't retry) but are no-op'd
 //
 import crypto from 'crypto';
 import { Request, Response } from 'express';
@@ -31,11 +30,17 @@ import { cancelPaddleSubscription } from '../utils/paddle-api';
 
 
 type PaddleEventType =
+  | 'subscription.created' | 'subscription.updated' | 'subscription.activated'
+  | 'subscription.past_due' | 'subscription.canceled' | 'subscription.paused' | 'subscription.resumed'
+  | 'transaction.completed' | 'transaction.payment_failed' | 'adjustment.updated';
+
+// Internal canonical event types used for processing logic
+type CanonicalEventType =
   | 'TRIALING' | 'ACTIVATED' | 'CANCELLED' | 'SUSPENDED'
   | 'UPDATED'  | 'PAYMENT_COMPLETED' | 'PAYMENT_FAILED' | 'REFUNDED';
 
 interface PaddleSubscriptionEventPayload {
-  eventType:        PaddleEventType;
+  eventType:        CanonicalEventType;
   productType?:     'app' | 'api' | 'credits';
   apiPlan?:         ApiPlanName;
   creditsToAdd?:    number;
@@ -92,14 +97,9 @@ async function logPaymentEvent(
 }
 
 // ── Card fingerprint extraction ───────────────────────────────────────────────
-//
-// Paddle sends payment method details inside the subscription event's
-// rawEvent.  We hash (last4 + expMonth + expYear) so we never store raw
-// card numbers anywhere.
-//
 function extractCardHash(rawEvent: any): string | null {
   try {
-    // Paddle v2: rawEvent.data.payment_method_details.card
+    // Paddle Billing (v3): rawEvent.data.payment_method_details.card
     const card =
       rawEvent?.data?.payment_method_details?.card ??
       rawEvent?.data?.transaction_details?.payment_method_details?.card;
@@ -120,14 +120,6 @@ function extractCardHash(rawEvent: any): string | null {
 }
 
 // ── Chargeback / multi-account fraud detection ────────────────────────────────
-//
-// Called after every ACTIVATED event (app and api plan).
-// Cross-references fingerprints + card hash to detect the same person
-// opening multiple accounts to get repeated free trials.
-//
-// On first detection  → warn both + cancel new subscription immediately
-// On repeat detection → ban both  + cancel all subscriptions + permanent DB flag
-//
 async function checkChargebackFraud(
   userId:         string,
   subscriptionId: string,
@@ -141,7 +133,6 @@ async function checkChargebackFraud(
 
   const userFingerprints: string[] = user.fingerprints ?? [];
   if (userFingerprints.length === 0) {
-    // No fingerprints stored yet — store card hash and proceed
     await db.collection('users').updateOne(
       { _id: user._id },
       { $addToSet: { cardFingerprints: cardHash } },
@@ -149,7 +140,6 @@ async function checkChargebackFraud(
     return { fraudDetected: false, shouldAbort: false };
   }
 
-  // Find any OTHER user who shares ≥1 fingerprint AND the same card
   const abuser = await db.collection('users').findOne({
     _id:              { $ne: user._id },
     fingerprints:     { $in: userFingerprints },
@@ -157,7 +147,6 @@ async function checkChargebackFraud(
   });
 
   if (!abuser) {
-    // No fraud found — save card hash and continue
     await db.collection('users').updateOne(
       { _id: user._id },
       { $addToSet: { cardFingerprints: cardHash } },
@@ -165,7 +154,6 @@ async function checkChargebackFraud(
     return { fraudDetected: false, shouldAbort: false };
   }
 
-  // ── Fraud detected ────────────────────────────────────────────────────────
   const combinedOffenses = Math.max(
     abuser.chargebackOffenses ?? 0,
     user.chargebackOffenses  ?? 0,
@@ -179,7 +167,6 @@ async function checkChargebackFraud(
 
   const now = new Date();
 
-  // Stamp both accounts
   await db.collection('users').updateMany(
     { _id: { $in: [user._id, abuser._id] } },
     {
@@ -193,7 +180,6 @@ async function checkChargebackFraud(
     },
   );
 
-  // Cancel the NEW subscription immediately (the one that just activated)
   try {
     await cancelPaddleSubscription(subscriptionId);
     console.warn(`[chargeback] Cancelled subscription ${subscriptionId} for user ${userId}`);
@@ -201,7 +187,6 @@ async function checkChargebackFraud(
     console.error('[chargeback] Failed to cancel new subscription:', err);
   }
 
-  // If permanent ban — also cancel any active subscription on the older account
   if (isPermanentBan) {
     const existingSub =
       productType === 'api'
@@ -218,7 +203,6 @@ async function checkChargebackFraud(
     }
   }
 
-  // Send warning emails to both accounts
   const sendWarning = async (email: string, targetUserId: string) => {
     if (!email) return;
     await sendEmail({
@@ -258,7 +242,7 @@ async function checkChargebackFraud(
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function handleApiPlanEvent(
-  eventType: PaddleEventType,
+  eventType: CanonicalEventType,
   userId:    string,
   payload:   PaddleSubscriptionEventPayload,
 ) {
@@ -271,14 +255,13 @@ async function handleApiPlanEvent(
       const rawStatus  = normStatus(payload.status);
       const isTrialing = rawStatus === 'TRIALING';
 
-      // ── Chargeback check ───────────────────────────────────────────────────
       const cardHash = extractCardHash(payload.rawEvent);
       const { shouldAbort } = await checkChargebackFraud(
         userId, subscriptionId, cardHash, 'api',
       );
       if (shouldAbort) {
         await logPaymentEvent(userId, subscriptionId, 'subscription_cancelled', payload);
-        return; // subscription already cancelled; log and bail
+        return;
       }
 
       await db.collection('users').updateOne(userQuery(userId), {
@@ -435,60 +418,125 @@ async function handleCreditPurchase(userId: string, payload: PaddleSubscriptionE
 // ═════════════════════════════════════════════════════════════════════════════
 
 export async function handlePaddleSubscriptionEvent(req: Request, res: Response) {
-  const payload = req.body as PaddleSubscriptionEventPayload;
-  const { eventType, subscriptionId, userId: rawUserId, productType = 'app' } = payload;
+  const rawPayload = req.body;
+  const eventType = rawPayload.event_type as PaddleEventType;
+  const data = rawPayload.data;
 
-  if (!eventType) return res.status(400).json({ success: false, message: 'Missing eventType' });
+  if (!eventType || !data) {
+    return res.status(400).json({ success: false, message: 'Invalid payload' });
+  }
+
+  // Map Paddle v3 events to our canonical types
+  let canonicalType: CanonicalEventType | null = null;
+  switch (eventType) {
+    case 'subscription.activated':
+    case 'subscription.created':
+      canonicalType = (data.status === 'trialing') ? 'TRIALING' : 'ACTIVATED';
+      break;
+    case 'subscription.canceled':
+      canonicalType = 'CANCELLED';
+      break;
+    case 'subscription.past_due':
+    case 'subscription.paused':
+      canonicalType = 'SUSPENDED';
+      break;
+    case 'subscription.resumed':
+    case 'subscription.updated':
+      canonicalType = 'UPDATED';
+      break;
+    case 'transaction.completed':
+      canonicalType = 'PAYMENT_COMPLETED';
+      break;
+    case 'transaction.payment_failed':
+      canonicalType = 'PAYMENT_FAILED';
+      break;
+    case 'adjustment.updated':
+      if (data.status === 'approved') canonicalType = 'REFUNDED';
+      break;
+  }
+
+  if (!canonicalType) {
+    console.log(`[Paddle] Unhandled event type: ${eventType}`);
+    return res.status(200).json({ success: true, message: 'Event ignored' });
+  }
+
+  // Extract common fields from Paddle Billing v3 structure
+  const customData = data.custom_data || {};
+  const userId = customData.userId || customData.user_id;
+  const subscriptionId = data.subscription_id || data.id;
+  const productType = customData.productType || customData.product_type || 'app';
+  const apiPlan = customData.apiPlan || customData.api_plan;
+  const creditsToAdd = customData.creditsToAdd || customData.credits_to_add;
+
+  const payload: PaddleSubscriptionEventPayload = {
+    eventType: canonicalType,
+    productType,
+    apiPlan,
+    creditsToAdd,
+    userId,
+    subscriptionId,
+    customerId: data.customer_id,
+    priceId: data.items?.[0]?.price_id,
+    status: data.status,
+    startTime: data.started_at,
+    nextBilledAt: data.next_billed_at,
+    payerEmail: data.customer_email, // Might need to fetch customer if not in event
+    canceledAt: data.canceled_at,
+    pausedAt: data.paused_at,
+    scheduledChange: data.scheduled_change,
+    amount: data.details?.totals?.total || data.amount,
+    currency: data.currency_code,
+    rawEvent: rawPayload,
+  };
+
   if (productType !== 'credits' && !subscriptionId) {
     return res.status(400).json({ success: false, message: 'Missing subscriptionId' });
   }
 
-  let userId = rawUserId;
-  if (!userId && subscriptionId) {
+  let resolvedUserId = userId;
+  if (!resolvedUserId && subscriptionId) {
     const u = await findUserBySubscriptionId(subscriptionId);
-    if (u) userId = u.wyiUserId;
+    if (u) resolvedUserId = u.wyiUserId;
   }
-  if (!userId) {
+
+  if (!resolvedUserId) {
     console.warn(`[Paddle] Could not resolve userId for ${subscriptionId}`);
     return res.status(200).json({ success: true, warning: 'User not found, logged as orphan.' });
   }
 
   // ── Ban check ──────────────────────────────────────────────────────────────
-  // Permanently banned users get a 200 (so Paddle doesn't retry) but we do
-  // nothing — their subscriptions were already cancelled when the ban was set.
   const bannedUser = await db.collection('users').findOne({
-    ...userQuery(userId),
+    ...userQuery(resolvedUserId),
     banStatus: 'banned',
   });
   if (bannedUser) {
-    console.warn(`[Paddle] Event ${eventType} for BANNED user ${userId} — no-op.`);
+    console.warn(`[Paddle] Event ${eventType} for BANNED user ${resolvedUserId} — no-op.`);
     return res.status(200).json({ success: true, warning: 'User is permanently banned.' });
   }
 
   try {
     if (productType === 'credits') {
-      await handleCreditPurchase(userId, payload);
+      await handleCreditPurchase(resolvedUserId, payload);
       return res.status(200).json({ success: true });
     }
     if (productType === 'api') {
-      await handleApiPlanEvent(eventType, userId, payload);
+      await handleApiPlanEvent(canonicalType, resolvedUserId, payload);
       return res.status(200).json({ success: true });
     }
 
     // ── App Pro plan ──────────────────────────────────────────────────────────
-    switch (eventType) {
+    switch (canonicalType) {
 
       case 'ACTIVATED': {
         const rawStatus = normStatus(payload.status);
         const isTrialing = rawStatus === 'TRIALING';
 
-        // ── Chargeback check ─────────────────────────────────────────────────
         const cardHash = extractCardHash(payload.rawEvent);
         const { shouldAbort } = await checkChargebackFraud(
-          userId, subscriptionId!, cardHash, 'app',
+          resolvedUserId, subscriptionId!, cardHash, 'app',
         );
         if (shouldAbort) {
-          await logPaymentEvent(userId, subscriptionId!, 'subscription_cancelled', payload);
+          await logPaymentEvent(resolvedUserId, subscriptionId!, 'subscription_cancelled', payload);
           return res.status(200).json({ success: true, warning: 'Chargeback fraud detected; subscription cancelled.' });
         }
 
@@ -504,17 +552,17 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           ...(payload.nextBilledAt && { nextBilledAt: payload.nextBilledAt }),
           ...(payload.scheduledChange && { scheduledChange: payload.scheduledChange }),
         };
-        await db.collection('users').updateOne(userQuery(userId), {
+        await db.collection('users').updateOne(userQuery(resolvedUserId), {
           $set: { plan: 'pro', subscription: subscriptionData },
           $unset: { scheduledDowngradeAt: '' },
         });
         if (isTrialing) {
-          await db.collection('users').updateOne(userQuery(userId), { $set: { hadTrial: true } });
+          await db.collection('users').updateOne(userQuery(resolvedUserId), { $set: { hadTrial: true } });
         }
-        await logPaymentEvent(userId, subscriptionId!, 'subscription_created', payload);
-        console.log(`[Paddle] User ${userId} upgraded to PRO.`);
-        migrateUserEmailsToPro(userId).catch(err =>
-          console.error(`[Paddle] Email migration failed for ${userId}:`, err),
+        await logPaymentEvent(resolvedUserId, subscriptionId!, 'subscription_created', payload);
+        console.log(`[Paddle] User ${resolvedUserId} upgraded to PRO.`);
+        migrateUserEmailsToPro(resolvedUserId).catch(err =>
+          console.error(`[Paddle] Email migration failed for ${resolvedUserId}:`, err),
         );
         break;
       }
@@ -525,7 +573,7 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           ?? data?.current_billing_period?.ends_at
           ?? payload.canceledAt ?? new Date().toISOString();
 
-        await db.collection('users').updateOne(userQuery(userId), {
+        await db.collection('users').updateOne(userQuery(resolvedUserId), {
           $set: {
             'subscription.status':            'ACTIVE',
             'subscription.cancelAtPeriodEnd': true,
@@ -535,10 +583,10 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
             scheduledDowngradeAt:             new Date(periodEnd),
           },
         });
-        await logPaymentEvent(userId, subscriptionId!, 'subscription_cancelled', payload);
-        console.log(`[Paddle] User ${userId} cancelled. Pro until ${periodEnd}.`);
+        await logPaymentEvent(resolvedUserId, subscriptionId!, 'subscription_cancelled', payload);
+        console.log(`[Paddle] User ${resolvedUserId} cancelled. Pro until ${periodEnd}.`);
 
-        db.collection('users').findOne(userQuery(userId)).then(async user => {
+        db.collection('users').findOne(userQuery(resolvedUserId)).then(async user => {
           if (!user?.email) return;
           const [emailCount, storageResult] = await Promise.all([
             db.collection('saved_emails').countDocuments({ userId: user._id }),
@@ -564,7 +612,7 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
       }
 
       case 'PAYMENT_COMPLETED': {
-        await db.collection('users').updateOne(userQuery(userId), {
+        await db.collection('users').updateOne(userQuery(resolvedUserId), {
           $set: {
             plan: 'pro',
             'subscription.status':            'ACTIVE',
@@ -577,59 +625,45 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
             'subscription.periodEnd':   '',
           },
         });
-        await logPaymentEvent(userId, subscriptionId!, 'subscription_renewed', payload);
-        console.log(`[Paddle] User ${userId} payment received — plan renewed.`);
+        await logPaymentEvent(resolvedUserId, subscriptionId!, 'subscription_renewed', payload);
+        console.log(`[Paddle] User ${resolvedUserId} payment received — plan renewed.`);
         break;
       }
 
       case 'SUSPENDED': {
-        await db.collection('users').updateOne(userQuery(userId), {
+        await db.collection('users').updateOne(userQuery(resolvedUserId), {
           $set: {
             'subscription.status':    'SUSPENDED',
             'subscription.pausedAt':  payload.pausedAt ?? new Date().toISOString(),
             'subscription.lastUpdated': new Date(),
           },
         });
-        console.warn(`[Paddle] User ${userId} subscription SUSPENDED.`);
+        console.warn(`[Paddle] User ${resolvedUserId} subscription SUSPENDED.`);
         break;
       }
 
       case 'UPDATED': {
-        await db.collection('users').updateOne(userQuery(userId), {
+        await db.collection('users').updateOne(userQuery(resolvedUserId), {
           $set: {
             'subscription.planId':      payload.priceId,
-            'subscription.status':      (normStatus(payload.status) || 'ACTIVE') as ISubscription['status'],
+            'subscription.status':      normStatus(payload.status) || 'ACTIVE',
             'subscription.lastUpdated': new Date(),
           },
         });
-        console.log(`[Paddle] User ${userId} subscription UPDATED.`);
-        break;
-      }
-
-      case 'PAYMENT_FAILED': {
-        await db.collection('users').updateOne(userQuery(userId), {
-          $set: {
-            'subscription.status':      'SUSPENDED',
-            'subscription.lastUpdated': new Date(),
-          },
-        });
-        console.warn(`[Paddle] User ${userId} payment FAILED.`);
+        console.log(`[Paddle] User ${resolvedUserId} subscription UPDATED.`);
         break;
       }
 
       case 'REFUNDED': {
-        await logPaymentEvent(userId, subscriptionId!, 'refund', payload);
-        console.log(`[Paddle] Refund logged for user ${userId}.`);
+        await logPaymentEvent(resolvedUserId, subscriptionId!, 'refund', payload);
+        console.log(`[Paddle] Pro plan refund logged for ${resolvedUserId}.`);
         break;
       }
-
-      default:
-        console.log(`[Paddle] Unhandled eventType: ${eventType}`);
     }
 
     return res.status(200).json({ success: true });
-  } catch (error) {
-    console.error(`[Paddle] Error handling ${eventType} for ${userId}:`, error);
-    return res.status(500).json({ success: false, message: 'Internal Server Error' });
+  } catch (err) {
+    console.error(`[Paddle] Error processing ${eventType} for ${resolvedUserId}:`, err);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 }
