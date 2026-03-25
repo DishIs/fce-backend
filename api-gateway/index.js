@@ -81,7 +81,8 @@ async function determinePlan(req) {
       try {
         const decoded = jwt.verify(token, JWT_SECRET);
         if (decoded && decoded.plan) {
-          return decoded.plan === 'pro' ? 'pro' : 'free';
+          // Any plan that isn't 'free' should go to the pro cluster
+          return (decoded.plan !== 'free') ? 'pro' : 'free';
         }
       } catch (_) {
         // expired / malformed — fall through silently
