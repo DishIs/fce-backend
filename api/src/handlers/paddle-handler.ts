@@ -476,21 +476,24 @@ async function handleCreditPurchase(userId: string, payload: PaddleSubscriptionE
 
 export async function handlePaddleSubscriptionEvent(req: Request, res: Response) {
   const rawPayload = req.body;
-  const eventType = rawPayload.event_type as PaddleEventType;
+
+  // ── Robust Event Extraction ────────────────────────────────────────────────
+  // Note: Your frontend proxy sends canonical types (ACTIVATED, TRIALING, etc.)
+  // but we also check raw event_type for backward compatibility or direct calls.
+  let canonicalType = rawPayload.eventType as CanonicalEventType;
+  const rawEventType = rawPayload.event_type as PaddleEventType;
   const data = rawPayload.data;
 
-  if (!eventType || !data) {
-    return res.status(400).json({ success: false, message: 'Invalid payload' });
-  }
-
-  // Map Paddle v3 events to our canonical types
-  let canonicalType: CanonicalEventType | null = null;
-  switch (eventType) {
-    case 'subscription.activated':
-    case 'subscription.created':
-      canonicalType = (data.status === 'trialing') ? 'TRIALING' : 'ACTIVATED';
-      break;
-    case 'subscription.canceled':
+  if (!canonicalType && rawEventType) {
+    switch (rawEventType) {
+      case 'subscription.activated':
+      case 'subscription.created':
+      case 'subscription.trialing' as any: // Handle direct trialing event
+        canonicalType = (data?.status === 'trialing' || rawEventType === ('subscription.trialing' as any))
+          ? 'TRIALING'
+          : 'ACTIVATED';
+        break;
+      case 'subscription.canceled':
       canonicalType = 'CANCELLED';
       break;
     case 'subscription.past_due':
@@ -510,20 +513,21 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
     case 'adjustment.updated':
       if (data.status === 'approved') canonicalType = 'REFUNDED';
       break;
-  }
+  } }
 
   if (!canonicalType) {
-    console.log(`[Paddle] Unhandled event type: ${eventType}`);
+    console.log(`[Paddle] Unhandled event type: ${canonicalType || rawEventType}`);
     return res.status(200).json({ success: true, message: 'Event ignored' });
   }
 
-  // Extract common fields from Paddle Billing v3 structure
-  const customData = data.custom_data || {};
-  const userId = customData.userId || customData.user_id;
-  const subscriptionId = data.subscription_id || data.id;
-  const productType = customData.productType || customData.product_type || 'app';
-  const apiPlan = customData.apiPlan || customData.api_plan;
-  const creditsToAdd = customData.creditsToAdd || customData.credits_to_add;
+  // ── Robust Data Extraction ─────────────────────────────────────────────────
+  // Prioritize fields from top-level (proxied by frontend) then fallback to data object
+  const customData = data?.custom_data || {};
+  const userId = rawPayload.userId || customData.userId || customData.user_id;
+  const subscriptionId = rawPayload.subscriptionId || data?.subscription_id || data?.id;
+  const productType = (rawPayload.productType || customData.productType || customData.product_type || 'app') as any;
+  const apiPlan = rawPayload.apiPlan || customData.apiPlan || customData.api_plan;
+  const creditsToAdd = rawPayload.creditsToAdd || customData.creditsToAdd || customData.credits_to_add;
 
   const payload: PaddleSubscriptionEventPayload = {
     eventType: canonicalType,
@@ -534,14 +538,14 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
     subscriptionId,
     customerId: data.customer_id,
     priceId: data.items?.[0]?.price_id,
-    status: data.status,
-    startTime: data.started_at,
-    nextBilledAt: data.next_billed_at,
-    payerEmail: data.customer_email, // Might need to fetch customer if not in event
-    canceledAt: data.canceled_at,
-    pausedAt: data.paused_at,
-    scheduledChange: data.scheduled_change,
-    amount: data.details?.totals?.total || data.amount,
+    status: rawPayload.status || data?.status,
+    startTime: rawPayload.startTime || data?.started_at || data?.created_at,
+    nextBilledAt: rawPayload.nextBilledAt || data?.next_billed_at,
+    payerEmail: rawPayload.payerEmail || data?.customer?.email || data?.customer_email,
+    canceledAt: rawPayload.canceledAt || data?.canceled_at,
+    pausedAt: rawPayload.pausedAt || data?.paused_at,
+    scheduledChange: rawPayload.scheduledChange || data?.scheduled_change,
+    amount: rawPayload.amount || data?.details?.totals?.total || data?.details?.totals?.grand_total || data?.amount,
     currency: data.currency_code,
     rawEvent: rawPayload,
   };
@@ -567,7 +571,7 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
     banStatus: 'banned',
   });
   if (bannedUser) {
-    console.warn(`[Paddle] Event ${eventType} for BANNED user ${resolvedUserId} — no-op.`);
+    console.warn(`[Paddle] Event ${canonicalType} for BANNED user ${resolvedUserId} — no-op.`);
     return res.status(200).json({ success: true, warning: 'User is permanently banned.' });
   }
 
@@ -720,7 +724,7 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
 
     return res.status(200).json({ success: true });
   } catch (err) {
-    console.error(`[Paddle] Error processing ${eventType} for ${resolvedUserId}:`, err);
+    console.error(`[Paddle] Error processing ${canonicalType} for ${resolvedUserId}:`, err);
     return res.status(500).json({ success: false, message: 'Internal server error' });
   }
 }

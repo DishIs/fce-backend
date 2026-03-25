@@ -286,6 +286,8 @@ services:
     restart: unless-stopped
     deploy:
       resources:
+        limits:
+          memory: 4G
         reservations:
           memory: 1G
     volumes:
