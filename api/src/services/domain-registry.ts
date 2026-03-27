@@ -13,7 +13,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type DomainTier = 'free' | 'pro';
-export type DomainTag  = 'new' | 'featured' | 'popular';
+export type DomainTag  = 'new' | 'featured' | 'popular' | 'donated';
 
 export interface DomainEntry {
   /** The bare domain name, lower-case, no leading @. */
@@ -58,6 +58,8 @@ export const DOMAIN_REGISTRY: DomainEntry[] = [
   // Example — replace with real domains when you register them:
   // { domain: 'getnotify.io',   tier: 'pro',  expiresAt: '2027-03-01', tags: ['new'],    active: true  },
   { domain: 'addmy.space', tier: 'free',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
+  { domain: 'mmo4life.shop', tier: 'free',  expiresAt: '2027-03-27', tags: ['new', 'donated'],    active: true  },
+  { domain: 'hdiscord.xyz', tier: 'free',  expiresAt: '2026-11-02', tags: ['new', 'donated'],    active: true  },
   { domain: 'attachmy.site', tier: 'free',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
   { domain: 'ditmail.pro', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new', 'featured'],    active: true  },
   { domain: 'isapi.live', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
