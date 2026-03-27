@@ -1,7 +1,5 @@
 'use strict';
 
-const { DENYSOFT } = require('haraka-constants');
-
 const shortid = require('shortid');
 const { format } = require('date-fns');
 const { simpleParser } = require('mailparser');
@@ -499,61 +497,7 @@ exports.tiered_save = async function (next, connection) {
 
             // ── Extract OTP and verification link ─────────────────────────────
             // extractOtp now handles both numeric (847291) and alphanumeric (ZXH-QCS, AB12CD) codes.
-
             // Pro users receive the actual value; free/anonymous receive a boolean teaser.
-
-            // OTP Abuse Detection
-            if (extractedOtp && plan === 'anonymous') {
-                const fingerprint = connection.remote.ip; // Using IP as a fingerprint for anonymous users
-                const now = Math.floor(Date.now() / 60000); // Current minute timestamp
-                const otpKey = `otp_abuse:${fingerprint}:${now}`;
-
-                await redisClient.incr(otpKey);
-                await redisClient.expire(otpKey, 120); // Expire in 2 minutes
-
-                const currentMinuteCount = parseInt(await redisClient.get(otpKey) || '0', 10);
-                const previousMinuteCount = parseInt(await redisClient.get(`otp_abuse:${fingerprint}:${now - 1}`) || '0', 10);
-                const totalOtpCount = currentMinuteCount + previousMinuteCount;
-
-                if (totalOtpCount >= (plugin.cfg.main.anon_otp_threshold || 20)) {
-                    plugin.logwarn(`OTP abuse detected from fingerprint ${fingerprint}. Total OTPs in 2 min: ${totalOtpCount}.`);
-                    // Action: Delay/Drop email
-                    // For anonymous users, we can deny temporarily to simulate delay or drop.
-                    const shadowBanDelay = Math.floor(Math.random() * (plugin.cfg.main.shadow_ban_random_delay_max_ms || 5000));
-                    await new Promise(resolve => setTimeout(resolve, shadowBanDelay));
-
-                    if (Math.random() < (plugin.cfg.main.shadow_ban_fail_rate || 0.5)) {
-                        plugin.logwarn(`Shadow banning OTP email from ${fingerprint}. Randomly dropping.`);
-                        return next(DENYSOFT, "Temporary issue. Please try again later.");
-                    } else {
-                        plugin.logwarn(`Shadow banning OTP email from ${fingerprint}. Delayed but proceeding.`);
-                        // Continue processing the email but with a delay
-                    }
-                }
-            }
-
-            // Domain-level throttling
-            const recipientDomain = recipient.host.toLowerCase();
-            const now = Math.floor(Date.now() / 60000); // Current minute timestamp
-            const domainLoadKey = `domain_load:${recipientDomain}:${now}`;
-
-            await redisClient.incr(domainLoadKey);
-            await redisClient.expire(domainLoadKey, 120); // Expire in 2 minutes
-
-            const currentDomainCount = parseInt(await redisClient.get(domainLoadKey) || '0', 10);
-            const previousDomainCount = parseInt(await redisClient.get(`domain_load:${recipientDomain}:${now - 1}`) || '0', 10);
-            const totalDomainCount = currentDomainCount + previousDomainCount;
-
-            if (totalDomainCount >= (plugin.cfg.main.domain_throttle_threshold || 100)) {
-                plugin.logwarn(`Domain ${recipientDomain} is experiencing heavy load. Total emails in 2 min: ${totalDomainCount}.`);
-                const throttleDelay = parseInt(plugin.cfg.main.domain_throttle_delay_ms || 1000, 10);
-                await new Promise(resolve => setTimeout(resolve, throttleDelay));
-                // Optionally, if load is extremely high, we could DENYSOFT
-                // if (totalDomainCount >= (plugin.cfg.main.domain_hard_throttle_threshold || 500)) {
-                //     return next(DENYSOFT, "Domain temporarily unavailable due to high load.");
-                // }
-            }
-
             const rawOtp              = extractOtp(parsed.subject, parsed.text);
             const rawVerificationLink = extractVerificationLink(parsed.html || parsed.textAsHtml, parsed.text);
 
