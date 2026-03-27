@@ -225,21 +225,20 @@ export const progressiveFrictionEngine = async (
       redis.sCard(cookieIpKey),
     ]);
     const usage = usageStr ? parseInt(usageStr, 10) : 0;
-
     // Hard block: extreme proxy rotation or cookie farm
     if (distinctCookies > 50 || distinctIps > 20) {
-      notifyAnomaly(
-        'abuse_429',
-        `Fingerprint: ${fingerprint}, Cookies: ${distinctCookies}, IPs: ${distinctIps}`,
-      ).catch(() => {});
-      return res.status(429).json({
-        success: false,
-        error:   'too_many_requests',
-        message: 'Suspicious behavior detected.',
-      });
+        await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 2000)); // slow-down
+        notifyAnomaly(
+            'abuse_429',
+            `Fingerprint: ${fingerprint}, Cookies: ${distinctCookies}, IPs: ${distinctIps}`,
+        ).catch(() => {});
+        return res.status(429).json({
+            success: false,
+            error:   'too_many_requests',
+            message: 'Suspicious behavior detected.',
+        });
     }
-
-    // Friction: >5 accounts from same fingerprint
+// Friction: >5 accounts from same fingerprint
     if (distinctAccounts > 5) {
       const delayMs = 500 + Math.random() * 1500;
       await new Promise(resolve => setTimeout(resolve, delayMs));
