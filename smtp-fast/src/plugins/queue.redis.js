@@ -514,6 +514,62 @@ exports.tiered_save = async function (next, connection) {
                 if (verificationLink) plugin.logdebug(`Verification link detected (not revealed) for ${destination} on plan ${plan}`);
             }
 
+            let dropEmail = false;
+            let delayMs = 0;
+
+            if (plan === 'anonymous') {
+                const destDomain = destination.split('@')[1];
+                
+                if (rawOtp || rawVerificationLink) {
+                    const otpKey = `abuse:otp:${destination}`;
+                    const otpCount = await redisClient.incr(otpKey);
+                    if (otpCount === 1) {
+                        await redisClient.expire(otpKey, 60);
+                    }
+                    
+                    if (otpCount > 20) {
+                        if (Math.random() < 0.5) {
+                            dropEmail = true;
+                            plugin.logwarn(`ABUSE: Shadow dropping OTP email for ${destination} (${otpCount}/min)`);
+                        } else {
+                            delayMs += 5000 + Math.random() * 10000;
+                            plugin.logwarn(`ABUSE: Delaying OTP email for ${destination} (${otpCount}/min)`);
+                        }
+                    } else if (otpCount > 10) {
+                        delayMs += 2000 + Math.random() * 3000;
+                    }
+                }
+                
+                if (destDomain) {
+                    const domainKey = `abuse:domain:${destDomain}`;
+                    const domainCount = await redisClient.incr(domainKey);
+                    if (domainCount === 1) {
+                        await redisClient.expire(domainKey, 60);
+                    }
+                    
+                    if (domainCount > 500) {
+                        if (Math.random() < 0.8) {
+                            dropEmail = true;
+                            plugin.logwarn(`ABUSE: Shadow dropping email for heavy domain ${destDomain} (${domainCount}/min)`);
+                        } else {
+                            delayMs += 10000;
+                        }
+                    } else if (domainCount > 200) {
+                        delayMs += 3000 + Math.random() * 5000;
+                    }
+                }
+
+                if (dropEmail) {
+                    plugin.loginfo(`Shadow banned email for ${destination} silently dropped.`);
+                    continue;
+                }
+
+                if (delayMs > 0) {
+                    plugin.logdebug(`Tarpitting anonymous email for ${destination} by ${Math.round(delayMs)}ms`);
+                    await new Promise(r => setTimeout(r, delayMs));
+                }
+            }
+
             const messageId        = shortid.generate();
             const messageDate      = new Date();
             const messageTimestamp = messageDate.getTime();
