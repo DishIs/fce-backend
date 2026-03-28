@@ -519,49 +519,69 @@ exports.tiered_save = async function (next, connection) {
 
             if (plan === 'anonymous') {
                 const destDomain = destination.split('@')[1];
+                const senderDomain = (parsed.from?.value?.[0]?.address || '').split('@')[1]?.toLowerCase() || 'unknown';
                 
                 if (rawOtp || rawVerificationLink) {
+                    // 1. Per-Destination OTP Throttle
                     const otpKey = `abuse:otp:${destination}`;
                     const otpCount = await redisClient.incr(otpKey);
-                    if (otpCount === 1) {
-                        await redisClient.expire(otpKey, 60);
-                    }
+                    if (otpCount === 1) await redisClient.expire(otpKey, 60);
                     
-                    if (otpCount > 20) {
-                        if (Math.random() < 0.5) {
+                    if (otpCount > 5) {
+                        dropEmail = true;
+                        plugin.logwarn(`ABUSE: Shadow dropping OTP for ${destination} (${otpCount}/min)`);
+                    }
+
+                    // 2. Global Anonymous OTP Throttle (stops widespread botnets)
+                    const globalOtpKey = `abuse:global:otp`;
+                    const globalOtpCount = await redisClient.incr(globalOtpKey);
+                    if (globalOtpCount === 1) await redisClient.expire(globalOtpKey, 60);
+
+                    if (globalOtpCount > 100) {
+                        if (Math.random() < 0.9) { // Drop 90%
                             dropEmail = true;
-                            plugin.logwarn(`ABUSE: Shadow dropping OTP email for ${destination} (${otpCount}/min)`);
-                        } else {
-                            delayMs += 5000 + Math.random() * 10000;
-                            plugin.logwarn(`ABUSE: Delaying OTP email for ${destination} (${otpCount}/min)`);
+                            plugin.logwarn(`ABUSE: Global OTP limit reached, dropping ${destination} (${globalOtpCount}/min)`);
                         }
-                    } else if (otpCount > 10) {
-                        delayMs += 2000 + Math.random() * 3000;
+                    }
+
+                    // 3. Sender-Domain OTP Throttle (stops single-service farming like OpenAI)
+                    if (senderDomain !== 'unknown') {
+                        const senderOtpKey = `abuse:sender_otp:${senderDomain}`;
+                        const senderOtpCount = await redisClient.incr(senderOtpKey);
+                        if (senderOtpCount === 1) await redisClient.expire(senderOtpKey, 60);
+
+                        if (senderOtpCount > 30) {
+                            if (Math.random() < 0.95) { // Drop 95%
+                                dropEmail = true;
+                                plugin.logwarn(`ABUSE: Sender ${senderDomain} being farmed, dropping OTP to ${destination} (${senderOtpCount}/min)`);
+                            } else {
+                                delayMs += 15000;
+                            }
+                        }
                     }
                 }
                 
+                // 4. Per-Recipient-Domain Throttle
                 if (destDomain) {
                     const domainKey = `abuse:domain:${destDomain}`;
                     const domainCount = await redisClient.incr(domainKey);
-                    if (domainCount === 1) {
-                        await redisClient.expire(domainKey, 60);
-                    }
+                    if (domainCount === 1) await redisClient.expire(domainKey, 60);
                     
-                    if (domainCount > 500) {
+                    if (domainCount > 100) { // Lowered from 500
                         if (Math.random() < 0.8) {
                             dropEmail = true;
                             plugin.logwarn(`ABUSE: Shadow dropping email for heavy domain ${destDomain} (${domainCount}/min)`);
                         } else {
-                            delayMs += 10000;
+                            delayMs += 5000;
                         }
-                    } else if (domainCount > 200) {
-                        delayMs += 3000 + Math.random() * 5000;
+                    } else if (domainCount > 50) { // Lowered from 200
+                        delayMs += 2000 + Math.random() * 3000;
                     }
                 }
 
                 if (dropEmail) {
                     plugin.loginfo(`Shadow banned email for ${destination} silently dropped.`);
-                    continue;
+                    continue; // Skip processing this recipient, but Haraka returns OK to sender
                 }
 
                 if (delayMs > 0) {

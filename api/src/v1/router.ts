@@ -40,7 +40,11 @@ v1Router.use((req, res, next) => {
       ip,
       plan: req.apiUser.plan,
     };
-    recordFingerprintUsage(fingerprint, req.apiUser.userId, ip, cookieId).catch(() => {});
+    
+    // Only track fingerprint usage for strictly free plans
+    if (req.apiUser.plan === 'free') {
+      recordFingerprintUsage(fingerprint, req.apiUser.userId, ip, cookieId, req.apiUser.plan).catch(() => {});
+    }
   }
   next();
 });

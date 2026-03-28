@@ -131,7 +131,7 @@ export const attachIdentityContext = (req: Request, res: Response, next: NextFun
       (plan === 'free' || plan === 'anonymous') &&
       isPublicApiPath(req)
     ) {
-      recordFingerprintUsage(fingerprint, userId, ip, cookieId).catch(err => {
+      recordFingerprintUsage(fingerprint, userId, ip, cookieId, plan).catch(err => {
         logCriticalError(err, req, { context: 'recordFingerprintUsage' });
       });
     }
@@ -151,7 +151,10 @@ export async function recordFingerprintUsage(
   userId: string | null,
   ip: string,
   cookieId: string,
+  plan: string = 'free',
 ) {
+  if (plan !== 'free' && plan !== 'anonymous') return;
+
   const monthStr = new Date().toISOString().slice(0, 7);
   const hourStr  = new Date().toISOString().slice(0, 13);
 
