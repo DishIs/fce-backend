@@ -22,6 +22,12 @@ export interface ApiPlanConfig {
     websocket: boolean;
     maxWsConnections: number;    // 0 = blocked
     waitApi: boolean;
+    mcpEnabled: boolean;
+    mcpMultiplier: number; // Applied generically to operations (e.g., 3x base)
+    mcpLimits: {
+      opsPerMinute: number;
+      maxConcurrent: number;
+    };
   };
 }
 
@@ -39,6 +45,9 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       websocket: false,
       maxWsConnections: 0,
       waitApi: false,
+      mcpEnabled: false,
+      mcpMultiplier: 1,
+      mcpLimits: { opsPerMinute: 0, maxConcurrent: 0 },
     },
   },
   developer: {
@@ -54,6 +63,9 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       websocket: false,
       maxWsConnections: 0,
       waitApi: true,
+      mcpEnabled: false,
+      mcpMultiplier: 1,
+      mcpLimits: { opsPerMinute: 0, maxConcurrent: 0 },
     },
   },
   startup: {
@@ -69,6 +81,9 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       websocket: true,
       maxWsConnections: 5,
       waitApi: true,
+      mcpEnabled: false,
+      mcpMultiplier: 1,
+      mcpLimits: { opsPerMinute: 0, maxConcurrent: 0 },
     },
   },
   growth: {
@@ -84,6 +99,9 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       websocket: true,
       maxWsConnections: 20,
       waitApi: true,
+      mcpEnabled: true,
+      mcpMultiplier: 3,
+      mcpLimits: { opsPerMinute: 60, maxConcurrent: 5 },
     },
   },
   enterprise: {
@@ -99,6 +117,9 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       websocket: true,
       maxWsConnections: 100,
       waitApi: true,
+      mcpEnabled: true,
+      mcpMultiplier: 3,
+      mcpLimits: { opsPerMinute: 200, maxConcurrent: 10 },
     },
   },
 };

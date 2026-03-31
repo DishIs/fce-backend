@@ -9,6 +9,7 @@ import { apiRateLimit } from './api-ratelimit';
 import inboxRouter from './routes/inbox';
 import domainsRouter from './routes/domains';
 import customDomainsRouter from './routes/custom-domains';
+import mcpRouter from './routes/mcp';
 import { db } from '../config/mongo';
 import { API_PLANS, CREDIT_PACKAGES } from './api-plans';
 import webhookRouter from './routes/webhooks';
@@ -60,6 +61,7 @@ v1Router.use('/inboxes', inboxRouter);
 v1Router.use('/domains', domainsRouter);
 v1Router.use('/custom-domains', customDomainsRouter);
 v1Router.use('/webhooks', webhookRouter);
+v1Router.use('/mcp', mcpRouter);
 
 // ── GET /v1/me ────────────────────────────────────────────────────────────────
 v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {
@@ -152,6 +154,8 @@ export function createPublicV1Router(): Router {
             websocket:           p.features.websocket,
             max_ws_connections:  p.features.maxWsConnections,
             wait_api:            p.features.waitApi,
+            mcp_enabled:         p.features.mcpEnabled,
+            mcp_limits:          p.features.mcpLimits,
           },
         })),
         credits: CREDIT_PACKAGES.map(c => ({

@@ -1,0 +1,20 @@
+{
+  "name": "maildrop-mcp-server",
+  "version": "1.0.0",
+  "description": "MCP Server for FreeCustom.Email AI-native email workflows",
+  "main": "build/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
+    "start": "node build/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.0",
+    "axios": "^1.7.9",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "typescript": "^5.7.3"
+  }
+}
