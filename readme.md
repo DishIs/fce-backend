@@ -28,7 +28,7 @@ This project is the backend component of the FreeCustom.Email service. The front
 
 *   **Custom SMTP Server:** A highly customized Haraka SMTP server for high-performance email processing.
 *   **Microservices Architecture:** A collection of services for different tasks, including a REST API, background workers, and more.
-*   **Real-time Updates:** WebSocket integration for real-time updates to the frontend.
+*   **Real-time Updates:** WebSocket and **Wait API (Long Polling)** integration for real-time message delivery to the frontend and API consumers.
 *   **Enterprise-Grade Security:**
     *   **HMAC Signing**: All internal API calls are cryptographically signed to prevent unauthorized access.
     *   **Abuse Engine**: Real-time fingerprinting and behavioral analysis to stop bot farms and multi-account abuse.

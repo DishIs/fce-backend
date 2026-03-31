@@ -21,6 +21,7 @@ export interface ApiPlanConfig {
     customDomains: boolean;
     websocket: boolean;
     maxWsConnections: number;    // 0 = blocked
+    waitApi: boolean;
   };
 }
 
@@ -37,6 +38,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       customDomains: false,
       websocket: false,
       maxWsConnections: 0,
+      waitApi: false,
     },
   },
   developer: {
@@ -51,6 +53,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       customDomains: false,
       websocket: false,
       maxWsConnections: 0,
+      waitApi: true,
     },
   },
   startup: {
@@ -65,6 +68,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       customDomains: false,
       websocket: true,
       maxWsConnections: 5,
+      waitApi: true,
     },
   },
   growth: {
@@ -79,6 +83,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       customDomains: true,
       websocket: true,
       maxWsConnections: 20,
+      waitApi: true,
     },
   },
   enterprise: {
@@ -93,6 +98,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       customDomains: true,
       websocket: true,
       maxWsConnections: 100,
+      waitApi: true,
     },
   },
 };

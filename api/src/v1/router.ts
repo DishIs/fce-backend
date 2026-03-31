@@ -151,6 +151,7 @@ export function createPublicV1Router(): Router {
             custom_domains:      p.features.customDomains,
             websocket:           p.features.websocket,
             max_ws_connections:  p.features.maxWsConnections,
+            wait_api:            p.features.waitApi,
           },
         })),
         credits: CREDIT_PACKAGES.map(c => ({

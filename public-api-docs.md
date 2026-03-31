@@ -100,6 +100,26 @@ Permanently delete a specific message.
 Automatically extract the latest 4-6 digit code from the most recent message.
 *   **Plan Requirement**: **Growth** or above.
 
+### `GET /v1/inboxes/:address/wait`
+Wait for a new email to arrive in the specified mailbox (Long Polling). This eliminates the need for rapid polling and reduces request overhead.
+*   **Query Params**:
+    *   `timeout`: Max seconds to wait (10–60 recommended, default 30).
+    *   `since`: (Optional) Last seen message ID. Return immediately if a newer message exists, otherwise wait.
+*   **Plan Requirement**: **Developer** or above.
+*   **Billing**: High-value endpoint; 1 wait call consumes **10 monthly requests**.
+*   **Response (Success)**:
+    ```json
+    {
+      "success": true,
+      "message": "New message received",
+      "data": { "id": "wNp8N0KoV", "subject": "Your OTP", ... }
+    }
+    ```
+*   **Response (Timeout)**:
+    ```json
+    { "success": false, "message": "Timeout reached" }
+    ```
+
 ### `GET /v1/custom-domains`
 List your active custom domains.
 *   **Plan Requirement**: **Growth** or above.

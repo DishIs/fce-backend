@@ -50,6 +50,7 @@ import {
   deleteApiCustomDomain,
 } from './handlers/api-custom-domains-handler';
 import cors from 'cors';
+import { globalEvents } from './services/events';
 import { notifyWebhooks } from './v1/routes/webhooks';
 import { deleteInboxNoteHandler, getInboxNotesHandler, upsertInboxNoteHandler } from './handlers/inbox-notes-handler';
 import { deleteInboxHandler } from './handlers/delete-inbox-handler';
@@ -302,6 +303,7 @@ connectToMongo().then(() => {
         if (mailbox === 'stats') { sendStatsToAllStatsClients(); return; }
         notifyMailbox(mailbox, event);
         notifyApiWsClients(mailbox, event);
+        globalEvents.emit(`mailbox:${mailbox}`, event);
         notifyWebhooks(mailbox, event).catch(err =>
           console.error('[pubsub] notifyWebhooks error:', err),
         );

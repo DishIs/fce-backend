@@ -64,7 +64,7 @@ async function updatePaddleSubscription(
     // Features are still unlocked right away via the optimistic DB write below.
     //
     // Downgrades: schedule item swap for next period, no charge/credit issued.
-    proration_billing_mode: upgrade ? 'prorated_next_billing_period' : 'do_not_bill',
+    proration_billing_mode: upgrade ? 'prorated_immediately' : 'do_not_bill',
   };
 
   if (!upgrade) {

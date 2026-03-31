@@ -22,6 +22,7 @@ import {
   OTP_PLANS,
   CUSTOM_DOMAIN_PLANS,
 } from '../api-plans';
+import { globalEvents } from '../../services/events';
 
 const router = Router();
 
@@ -388,6 +389,83 @@ router.delete('/:inbox/messages/:id', async (req: Request, res: Response): Promi
   } catch {
     return res.status(500).json({ success: false, error: 'server_error' });
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /v1/inboxes/:inbox/wait — long-polling wait for new emails
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/:inbox/wait', async (req: Request, res: Response): Promise<any> => {
+  const inbox = req.params.inbox.toLowerCase();
+  const apiUser = req.apiUser!;
+
+  if (apiUser.plan === 'free') {
+    return res.status(403).json({
+      success: false,
+      error: 'plan_required',
+      message: 'The Wait API requires a Developer plan or above.',
+      upgrade_url: 'https://freecustom.email/api/pricing',
+    });
+  }
+
+  if (!(await assertOwned(apiUser.userId, inbox))) {
+    return res.status(403).json({
+      success: false,
+      error: 'inbox_not_owned',
+      message: 'Register this inbox first via POST /v1/inboxes.',
+    });
+  }
+
+  let timeout = parseInt(req.query.timeout as string, 10);
+  if (isNaN(timeout)) timeout = 30;
+  if (timeout < 10) timeout = 10;
+  if (timeout > 60) timeout = 60;
+
+  const since = req.query.since as string | undefined;
+  const internalPlan = apiPlanToInternalPlan(apiUser.plan);
+
+  // Apply premium rate limiting cost (Wait call = 10 normal calls)
+  // We've already been charged 1 call by the rate-limit middleware, so we add 9
+  const monthKey = `rl:m:${apiUser.userId}:${new Date().toISOString().slice(0, 7)}`;
+  await redis.incrBy(monthKey, 9).catch(() => {});
+
+  if (since) {
+    const messages = await getInbox(inbox, internalPlan) as any[];
+    const sinceIndex = messages.findIndex(m => m.id === since);
+    
+    if (sinceIndex > 0) {
+      // Return the newest message that arrived after 'since'
+      const newest = messages[0];
+      const sanitized = sanitizeAttachments(sanitizeMessage(newest, apiUser.plan), apiUser.plan);
+      return res.json({ success: true, message: 'New message received', data: sanitized });
+    }
+  }
+
+  // Hold request
+  const eventName = `mailbox:${inbox}`;
+  
+  let timer: NodeJS.Timeout;
+
+  const onNewEmail = (event: any) => {
+    clearTimeout(timer);
+    const sanitized = sanitizeAttachments(sanitizeMessage(event, apiUser.plan), apiUser.plan);
+    if (!res.headersSent) {
+      res.json({ success: true, message: 'New message received', data: sanitized });
+    }
+  };
+
+  timer = setTimeout(() => {
+    globalEvents.off(eventName, onNewEmail);
+    if (!res.headersSent) {
+      res.json({ success: false, message: 'Timeout reached' });
+    }
+  }, timeout * 1000);
+
+  globalEvents.once(eventName, onNewEmail);
+
+  req.on('close', () => {
+    globalEvents.off(eventName, onNewEmail);
+    clearTimeout(timer);
+  });
 });
 
 export default router;
