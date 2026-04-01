@@ -93,3 +93,25 @@ export async function callInternalAPI(endpoint: string, data: any, req: Request,
 
 If a Free user makes a high volume of requests, they will automatically be subjected to **Progressive Friction**. 
 The API will artificially inject a `200ms` or `500ms` delay into the response. Do not treat this latency as an error, but rather as the system protecting itself. Ensure your Next.js frontend has appropriate loading states and doesn't timeout requests under 1.5 seconds.
+
+## Internal Billing Endpoints (One-Click Automations)
+If a user tries to upgrade their API plan, and they have an existing `paddleCustomerId` saved from upgrading their app plan, you can trigger these to bypass standard checkout models:
+
+### `POST /api/billing/auto-charge-plan`
+*   **Body**: `{ "userId": "...", "targetPlan": "growth", "interval": "yearly" }`
+*   **Description**: Uses `collection_mode: 'automatic'` to charge the user immediately. If Paddle fails (no saved card or declined), returns `{ error: 'paddle_error', message: '...' }` so your frontend can fallback to standard checkout.
+
+### `POST /api/billing/auto-buy-credits`
+*   **Body**: `{ "userId": "...", "priceId": "pri_xyz123" }`
+*   **Description**: Executes a one-off automated transaction for API credits.
+
+## Webhooks & Management (Growth+)
+Webhooks now enforce strict logging and plan validations:
+*   `GET /api/user/webhooks/:wyiUserId` : Returns active webhooks.
+*   `GET /api/user/webhooks/logs/:wyiUserId` : Returns the last 100 webhook delivery logs (`success`, `failed`, `retrying` status, exact HTTP `responseCode`, and `timestamp`).
+
+## Global Platform Stats
+*   `GET /api/statistics/platform-stats` : Fast Redis-driven endpoint that outputs:
+    *   `total_api_calls`
+    *   `total_emails_received`
+    *   `active_api_users`

@@ -102,10 +102,13 @@ export async function handleApiWebSocket(
     const hint = `WebSocket access requires Startup plan ($19/mo) or above. Your plan: ${plan}.`;
     try {
       ws.send(JSON.stringify({
-        type:        'error',
-        code:        'plan_required',
-        message:     hint,
-        upgrade_url: 'https://freecustom.email/api/pricing',
+        type:             'error',
+        code:             'plan_required',
+        message:          hint,
+        upgrade_required: true,
+        recommended_plan: 'growth',
+        pricing_url:      'https://freecustom.email/api/pricing',
+        upgrade_url:      'https://freecustom.email/api/pricing',
       }));
     } catch (_) {}
     ws.close(1008, hint);
@@ -117,7 +120,16 @@ export async function handleApiWebSocket(
   const userConns  = activeConnections.get(userId) ?? new Set<ApiWsClient>();
   if (userConns.size >= planConfig.features.maxWsConnections) {
     const hint = `Max WebSocket connections (${planConfig.features.maxWsConnections}) reached for ${plan} plan.`;
-    try { ws.send(JSON.stringify({ type: 'error', code: 'connection_limit', message: hint })); } catch (_) {}
+    try {
+      ws.send(JSON.stringify({
+        type: 'error',
+        code: 'connection_limit',
+        message: hint,
+        upgrade_required: true,
+        recommended_plan: 'growth',
+        pricing_url: 'https://freecustom.email/api/pricing'
+      }));
+    } catch (_) {}
     ws.close(1008, hint);
     return;
   }

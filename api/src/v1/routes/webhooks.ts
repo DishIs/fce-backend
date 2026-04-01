@@ -15,18 +15,21 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../../config/mongo';
 import { ObjectId } from 'mongodb';
-import { WS_PLANS } from '../api-plans';
+import { WEBHOOK_PLANS } from '../api-plans';
 
 const router = Router();
 
 // ── Plan gate helper ──────────────────────────────────────────────────────────
 function assertWebhookPlan(req: Request, res: Response): boolean {
-  if (!WS_PLANS.includes(req.apiUser!.plan)) {
+  if (!WEBHOOK_PLANS.includes(req.apiUser!.plan)) {
     res.status(403).json({
-      success:     false,
-      error:       'plan_required',
-      message:     `Webhook subscriptions require Startup plan ($19/mo) or above. Your plan: ${req.apiUser!.plan}.`,
-      upgrade_url: 'https://freecustom.email/api/pricing',
+      success:          false,
+      error:            'plan_required',
+      message:          `Webhook subscriptions require Growth plan ($49/mo) or above. Your plan: ${req.apiUser!.plan}.`,
+      upgrade_required: true,
+      recommended_plan: 'growth',
+      pricing_url:      'https://freecustom.email/api/pricing',
+      upgrade_url:      'https://freecustom.email/api/pricing',
     });
     return false;
   }
@@ -164,6 +167,8 @@ export async function notifyWebhooks(mailbox: string, event: any): Promise<void>
   const payload = JSON.stringify(event);
 
   for (const hook of hooks) {
+    // Fire and forget logging logic
+    const startTime = Date.now();
     fetch(hook.url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -171,7 +176,10 @@ export async function notifyWebhooks(mailbox: string, event: any): Promise<void>
       signal:  AbortSignal.timeout(10_000),
     })
       .then(async (res) => {
-        if (res.ok) {
+        const success = res.ok;
+        await logWebhookEvent(hook, 'email.received', success ? 'success' : 'failed', res.status);
+        
+        if (success) {
           // Reset failure counter on successful delivery
           if (hook.failureCount > 0) {
             await db.collection('webhooks').updateOne(
@@ -185,8 +193,26 @@ export async function notifyWebhooks(mailbox: string, event: any): Promise<void>
       })
       .catch(async (err) => {
         console.error(`[webhooks] Delivery failed for hook ${hook._id}:`, err.message);
+        await logWebhookEvent(hook, 'email.received', 'failed', 0);
         await incrementFailure(hook);
       });
+  }
+}
+
+async function logWebhookEvent(hook: any, eventType: string, status: 'success' | 'failed' | 'retrying', statusCode: number) {
+  try {
+    await db.collection('webhook_logs').insertOne({
+      webhookId: hook._id,
+      wyiUserId: hook.wyiUserId,
+      eventType,
+      targetUrl: hook.url,
+      status,
+      responseCode: statusCode,
+      timestamp: new Date(),
+      retryCount: hook.failureCount || 0
+    });
+  } catch (err) {
+    // Ignore log errors to not block flow
   }
 }
 

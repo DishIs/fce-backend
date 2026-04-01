@@ -22,7 +22,10 @@ router.use((req: Request, res: Response, next: NextFunction): any => {
   if (!apiUser.planConfig.features.mcpEnabled) {
     return res.status(403).json({
       error: 'MCP not available on your plan',
-      upgrade: 'Growth required'
+      upgrade: 'Growth required',
+      upgrade_required: true,
+      recommended_plan: 'growth',
+      pricing_url: 'https://freecustom.email/api/pricing'
     });
   }
   next();
@@ -44,6 +47,9 @@ router.use(async (req: Request, res: Response, next: NextFunction): Promise<any>
           success: false,
           error: 'mcp_rate_limit_exceeded',
           message: `MCP limit of ${limits.opsPerMinute} ops/min exceeded.`,
+          upgrade_required: true,
+          recommended_plan: 'enterprise',
+          pricing_url: 'https://freecustom.email/api/pricing'
         });
       }
     } catch (err) {

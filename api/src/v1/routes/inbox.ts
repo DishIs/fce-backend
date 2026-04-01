@@ -403,6 +403,9 @@ router.get('/:inbox/wait', async (req: Request, res: Response): Promise<any> => 
       success: false,
       error: 'plan_required',
       message: 'The Wait API requires a Developer plan or above.',
+      upgrade_required: true,
+      recommended_plan: 'developer',
+      pricing_url: 'https://freecustom.email/api/pricing',
       upgrade_url: 'https://freecustom.email/api/pricing',
     });
   }

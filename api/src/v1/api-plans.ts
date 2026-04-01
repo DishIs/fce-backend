@@ -149,6 +149,9 @@ export const OTP_PLANS: ApiPlanName[] = ['growth', 'enterprise'];
 /** Plans that allow custom domain inboxes */
 export const CUSTOM_DOMAIN_PLANS: ApiPlanName[] = ['growth', 'enterprise'];
 
+/** Plans that support Webhooks */
+export const WEBHOOK_PLANS: ApiPlanName[] = ['growth', 'enterprise'];
+
 /**
  * Map an API plan to the internal Redis/Mongo plan tier.
  * growth + enterprise get full "pro" inbox features (persistent storage, etc.).

@@ -127,7 +127,7 @@ List your active custom domains.
 ### `POST /v1/webhooks`
 Subscribe to real-time message notifications via webhook.
 *   **Body**: `{ "url": "https://your-server.com/callback", "inbox": "target@domain.com" }`
-*   **Plan Requirement**: **Startup** or above.
+*   **Plan Requirement**: **Growth** or above.
 
 ---
 

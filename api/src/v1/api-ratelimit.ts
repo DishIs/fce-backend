@@ -105,6 +105,9 @@ export async function apiRateLimit(req: Request, res: Response, next: NextFuncti
       return res.status(429).json({
         success: false, error: 'rate_limit_exceeded',
         message: `Per-second limit of ${requestsPerSecond} req/s exceeded (${apiUser.plan} plan).`,
+        upgrade_required: true,
+        recommended_plan: 'growth',
+        pricing_url: 'https://freecustom.email/api/pricing',
         upgrade_url: 'https://freecustom.email/api/pricing',
       });
     }
@@ -126,6 +129,9 @@ export async function apiRateLimit(req: Request, res: Response, next: NextFuncti
           success: false, error: 'monthly_quota_exceeded',
           message: `Monthly quota of ${requestsPerMonth.toLocaleString()} requests exhausted.`,
           hint:    'Purchase request credits (never expire) or upgrade your plan.',
+          upgrade_required: true,
+          recommended_plan: 'growth',
+          pricing_url: 'https://freecustom.email/api/pricing',
           credits_url: 'https://freecustom.email/api/credits',
           upgrade_url: 'https://freecustom.email/api/pricing',
         });
