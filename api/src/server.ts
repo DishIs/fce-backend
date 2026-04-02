@@ -253,32 +253,6 @@ connectToMongo().then(() => {
   // ── Webhooks & Stats ───────────────────────────────────────────────────────
   app.get('/user/webhooks/logs/:wyiUserId', getUserWebhookLogsHandler);
   app.get('/user/webhooks/:wyiUserId', getUserWebhooksHandler);
-  
-  app.get('/statistics/platform-stats', async (req, res) => {
-    try {
-      const monthStr = new Date().toISOString().slice(0, 7);
-      let totalApiCalls = 0;
-      const keys = await redis.keys(`rl:m:*:${monthStr}`);
-      if (keys.length > 0) {
-        const values = await redis.mGet(keys);
-        totalApiCalls = values.reduce((acc, val) => acc + (parseInt(val || '0', 10)), 0);
-      }
-      
-      const activeApiUsers = keys.length;
-      const totalEmails = await redis.get('stats:emails_received') || '0';
-      
-      res.json({
-        success: true,
-        data: {
-          total_api_calls: totalApiCalls,
-          total_emails_received: parseInt(totalEmails, 10),
-          active_api_users: activeApiUsers
-        }
-      });
-    } catch (err: any) {
-      res.status(500).json({ success: false, error: err.message });
-    }
-  });
 
   // ── Billing ────────────────────────────────────────────────────────────────
   app.post('/billing/auto-charge-plan', autoChargeApiPlanHandler);
