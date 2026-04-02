@@ -1,13 +1,30 @@
 {
-  "name": "maildrop-mcp-server",
-  "version": "1.0.0",
-  "description": "MCP Server for FreeCustom.Email AI-native email workflows",
+  "name": "fce-mcp-server",
+  "version": "1.0.6",
+  "description": "Official Model Context Protocol (MCP) server for FreeCustom.Email - AI-native email workflows",
   "main": "build/index.js",
   "type": "module",
+  "bin": {
+    "fce-mcp-server": "build/index.js"
+  },
   "scripts": {
     "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
-    "start": "node build/index.js"
+    "start": "node build/index.js",
+    "prepublishOnly": "npm run build"
   },
+  "keywords": [
+    "mcp",
+    "model context protocol",
+    "email",
+    "ai",
+    "claude",
+    "cursor",
+    "automation",
+    "otp",
+    "freecustom.email"
+  ],
+  "author": "FreeCustom.Email",
+  "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.0",
     "axios": "^1.7.9",

@@ -64,7 +64,7 @@ Configure your MCP client (e.g., Claude Desktop `claude_desktop_config.json`):
   "mcpServers": {
     "fce-mcp": {
       "command": "npx",
-      "args": ["-y", "maildrop-mcp-server"],
+      "args": ["-y", "fce-mcp-server"],
       "env": {
         "FCE_API_KEY": "your_growth_or_enterprise_api_key"
       }
