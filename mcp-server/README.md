@@ -3,7 +3,7 @@
 [![npm version](https://badge.fury.io/js/fce-mcp-server.svg)](https://badge.fury.io/js/fce-mcp-server)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-The official **Model Context Protocol (MCP)** server for [FreeCustom.Email](https://freecustom.email). 
+The official **Model Context Protocol (MCP)** server for [FreeCustom.Email API](https://www.freecustom.email/api). 
 
 This server provides the ultimate **temp mail API** and **temp mail automation** capabilities specifically designed for AI agents (Claude, Cursor, Windsurf, Kilo Code, etc.). Instead of building complex polling logic to wait for emails and extract OTPs, your AI agents can now create inboxes, wait for emails, and extract verification codes in a single tool call.
 
