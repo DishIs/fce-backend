@@ -53,7 +53,12 @@ router.use(async (req: Request, res: Response, next: NextFunction): Promise<any>
         });
       }
     } catch (err) {
-      console.error('[mcp-ratelimit] Redis error:', err);
+      console.error('[mcp-ratelimit] Redis error (failing closed to prevent bypass):', err);
+      return res.status(500).json({
+        success: false,
+        error: 'internal_error',
+        message: 'Rate limit verification failed due to internal error.'
+      });
     }
   }
   next();
@@ -186,6 +191,21 @@ router.post('/create-and-wait-otp', async (req: Request, res: Response): Promise
   }
 
   try {
+    const user = await db.collection('users').findOne({ wyiUserId: apiUser.userId });
+    if (!user) return res.status(404).json({ success: false, error: 'user_not_found' });
+
+    const maxInboxes = apiUser.planConfig.features.maxInboxes;
+    const currentInboxCount = (user.apiInboxes || []).length;
+
+    if (maxInboxes > 0 && currentInboxCount >= maxInboxes) {
+      return res.status(403).json({
+        success: false,
+        error: 'inbox_limit_reached',
+        message: `Your plan (${apiUser.planConfig.label}) is limited to ${maxInboxes} registered inboxes. Upgrade your plan to add more inboxes.`,
+        upgrade_url: 'https://freecustom.email/api/pricing',
+      });
+    }
+
     // Register Inbox
     await db.collection('users').updateOne(
       { wyiUserId: apiUser.userId },

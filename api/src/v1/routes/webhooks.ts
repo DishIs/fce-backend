@@ -75,6 +75,15 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
   }
 
   try {
+    const existingCount = await db.collection('webhooks').countDocuments({ wyiUserId: apiUser.userId });
+    if (existingCount >= 20) {
+      return res.status(403).json({
+        success: false,
+        error: 'limit_reached',
+        message: 'Maximum of 20 webhooks allowed per account.',
+      });
+    }
+
     const secret = crypto.randomBytes(32).toString('hex');
 
     const doc = {
