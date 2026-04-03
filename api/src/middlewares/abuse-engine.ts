@@ -156,20 +156,26 @@ export async function recordFingerprintUsage(
   if (plan !== 'free' && plan !== 'anonymous') return;
 
   const monthStr = new Date().toISOString().slice(0, 7);
-  const hourStr  = new Date().toISOString().slice(0, 13);
 
   const monthKey = `abuse:fp:${fingerprint}:${monthStr}`;
-  await redis.incr(monthKey);
-  await redis.expire(monthKey, 30 * 24 * 60 * 60); // 30 days
+  const usage = await redis.incr(monthKey);
+  
+  // Adaptive TTL: Drive-by bots get 24h, consistent users get 30d
+  if (usage === 1) {
+    await redis.expire(monthKey, 24 * 60 * 60); // 1 day
+  } else if (usage === 10) {
+    await redis.expire(monthKey, 30 * 24 * 60 * 60); // 30 days
+  }
 
+  // Sliding window instead of per-hour partitioning reduces keys by 24x
   if (ip && cookieId !== 'no-cookie') {
-    const ipCookieKey = `abuse:ip_cookies:${ip}:${hourStr}`;
+    const ipCookieKey = `abuse:ip_cookies:${ip}`;
     await redis.sAdd(ipCookieKey, cookieId);
     await redis.expire(ipCookieKey, 2 * 60 * 60);
   }
 
   if (cookieId !== 'no-cookie' && ip) {
-    const cookieIpKey = `abuse:cookie_ips:${cookieId}:${hourStr}`;
+    const cookieIpKey = `abuse:cookie_ips:${cookieId}`;
     await redis.sAdd(cookieIpKey, ip);
     await redis.expire(cookieIpKey, 2 * 60 * 60);
   }
@@ -212,13 +218,13 @@ export const progressiveFrictionEngine = async (
 
   const { fingerprint, ip } = req.userContext;
   const cookieId  = req.header('x-cookie-id') || 'no-cookie';
-  const hourStr   = new Date().toISOString().slice(0, 13);
   const monthStr  = new Date().toISOString().slice(0, 7);
 
   const monthKey    = `abuse:fp:${fingerprint}:${monthStr}`;
   const accountKey  = `abuse:fp_accounts:${fingerprint}`;
-  const ipCookieKey = `abuse:ip_cookies:${ip}:${hourStr}`;
-  const cookieIpKey = `abuse:cookie_ips:${cookieId}:${hourStr}`;
+  // Use the sliding window keys instead of hourly partitioned keys
+  const ipCookieKey = `abuse:ip_cookies:${ip}`;
+  const cookieIpKey = `abuse:cookie_ips:${cookieId}`;
 
   try {
     const [usageStr, distinctAccounts, distinctCookies, distinctIps] = await Promise.all([
