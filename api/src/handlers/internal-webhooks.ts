@@ -4,6 +4,14 @@ import { db } from '../config/mongo';
 import { ObjectId } from 'mongodb';
 import crypto from 'crypto';
 
+async function resolveUserId(wyiUserIdOrLinkedId: string): Promise<string | null> {
+  const user = await db.collection('users').findOne(
+    { $or: [{ wyiUserId: wyiUserIdOrLinkedId }, { linkedProviderIds: wyiUserIdOrLinkedId }] },
+    { projection: { wyiUserId: 1 } }
+  );
+  return user?.wyiUserId || null;
+}
+
 export async function addWebhookHandler(req: Request, res: Response): Promise<any> {
   const { wyiUserId, url, inbox } = req.body;
 
@@ -15,14 +23,23 @@ export async function addWebhookHandler(req: Request, res: Response): Promise<an
     });
   }
 
+  const canonicalUserId = await resolveUserId(wyiUserId);
+  if (!canonicalUserId) {
+    return res.status(404).json({
+      success: false,
+      error: 'user_not_found',
+      message: 'User not found.',
+    });
+  }
+
   const normalizedInbox = String(inbox).trim().toLowerCase();
 
   const user = await db.collection('users').findOne({
     $or: [
-      { wyiUserId, apiInboxes: normalizedInbox },
-      { wyiUserId, inboxes: normalizedInbox },
-      { linkedProviderIds: wyiUserId, apiInboxes: normalizedInbox },
-      { linkedProviderIds: wyiUserId, inboxes: normalizedInbox },
+      { wyiUserId: canonicalUserId, apiInboxes: normalizedInbox },
+      { wyiUserId: canonicalUserId, inboxes: normalizedInbox },
+      { linkedProviderIds: canonicalUserId, apiInboxes: normalizedInbox },
+      { linkedProviderIds: canonicalUserId, inboxes: normalizedInbox },
     ],
   });
 
@@ -38,7 +55,7 @@ export async function addWebhookHandler(req: Request, res: Response): Promise<an
 
   try {
     const doc = {
-      wyiUserId,
+      wyiUserId: canonicalUserId,
       inbox: normalizedInbox,
       url,
       secret,
@@ -76,10 +93,19 @@ export async function deleteWebhookHandler(req: Request, res: Response): Promise
     });
   }
 
+  const canonicalUserId = await resolveUserId(wyiUserId);
+  if (!canonicalUserId) {
+    return res.status(404).json({
+      success: false,
+      error: 'user_not_found',
+      message: 'User not found.',
+    });
+  }
+
   try {
     const result = await db.collection('webhooks').deleteOne({
       _id: new ObjectId(webhookId),
-      $or: [{ wyiUserId }, { linkedProviderIds: wyiUserId }],
+      wyiUserId: canonicalUserId,
     });
 
     if (result.deletedCount === 0) {
@@ -114,11 +140,20 @@ export async function regenerateWebhookSecretHandler(req: Request, res: Response
     });
   }
 
+  const canonicalUserId = await resolveUserId(wyiUserId);
+  if (!canonicalUserId) {
+    return res.status(404).json({
+      success: false,
+      error: 'user_not_found',
+      message: 'User not found.',
+    });
+  }
+
   const newSecret = crypto.randomBytes(32).toString('hex');
 
   try {
     const result = await db.collection('webhooks').findOneAndUpdate(
-      { _id: new ObjectId(webhookId), $or: [{ wyiUserId }, { linkedProviderIds: wyiUserId }] },
+      { _id: new ObjectId(webhookId), wyiUserId: canonicalUserId },
       { $set: { secret: newSecret } },
       { returnDocument: 'after' },
     );
@@ -154,9 +189,18 @@ export async function getUserWebhooksHandler(req: Request, res: Response): Promi
     });
   }
 
+  const canonicalUserId = await resolveUserId(wyiUserId);
+  if (!canonicalUserId) {
+    return res.status(404).json({
+      success: false,
+      error: 'user_not_found',
+      message: 'User not found.',
+    });
+  }
+
   try {
     const hooks = await db.collection('webhooks')
-      .find({ $or: [{ wyiUserId }, { linkedProviderIds: wyiUserId }] })
+      .find({ wyiUserId: canonicalUserId })
       .project({ secret: 0 })
       .toArray();
     return res.json({ success: true, data: hooks });
@@ -179,10 +223,19 @@ export async function getWebhookByIdHandler(req: Request, res: Response): Promis
     });
   }
 
+  const canonicalUserId = await resolveUserId(wyiUserId);
+  if (!canonicalUserId) {
+    return res.status(404).json({
+      success: false,
+      error: 'user_not_found',
+      message: 'User not found.',
+    });
+  }
+
   try {
     const hook = await db.collection('webhooks').findOne({
       _id: new ObjectId(webhookId),
-      $or: [{ wyiUserId }, { linkedProviderIds: wyiUserId }],
+      wyiUserId: canonicalUserId,
     });
 
     if (!hook) {
@@ -227,9 +280,18 @@ export async function getUserWebhookLogsHandler(req: Request, res: Response): Pr
     });
   }
 
+  const canonicalUserId = await resolveUserId(wyiUserId);
+  if (!canonicalUserId) {
+    return res.status(404).json({
+      success: false,
+      error: 'user_not_found',
+      message: 'User not found.',
+    });
+  }
+
   try {
     const logs = await db.collection('webhook_logs')
-      .find({ $or: [{ wyiUserId }, { linkedProviderIds: wyiUserId }] })
+      .find({ wyiUserId: canonicalUserId })
       .sort({ timestamp: -1 })
       .limit(100)
       .toArray();
