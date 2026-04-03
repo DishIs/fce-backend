@@ -79,7 +79,7 @@ export async function deleteWebhookHandler(req: Request, res: Response): Promise
   try {
     const result = await db.collection('webhooks').deleteOne({
       _id: new ObjectId(webhookId),
-      wyiUserId,
+      $or: [{ wyiUserId }, { linkedProviderIds: wyiUserId }],
     });
 
     if (result.deletedCount === 0) {
@@ -118,7 +118,7 @@ export async function regenerateWebhookSecretHandler(req: Request, res: Response
 
   try {
     const result = await db.collection('webhooks').findOneAndUpdate(
-      { _id: new ObjectId(webhookId), wyiUserId },
+      { _id: new ObjectId(webhookId), $or: [{ wyiUserId }, { linkedProviderIds: wyiUserId }] },
       { $set: { secret: newSecret } },
       { returnDocument: 'after' },
     );
@@ -156,7 +156,7 @@ export async function getUserWebhooksHandler(req: Request, res: Response): Promi
 
   try {
     const hooks = await db.collection('webhooks')
-      .find({ wyiUserId })
+      .find({ $or: [{ wyiUserId }, { linkedProviderIds: wyiUserId }] })
       .project({ secret: 0 })
       .toArray();
     return res.json({ success: true, data: hooks });
@@ -182,7 +182,7 @@ export async function getWebhookByIdHandler(req: Request, res: Response): Promis
   try {
     const hook = await db.collection('webhooks').findOne({
       _id: new ObjectId(webhookId),
-      wyiUserId,
+      $or: [{ wyiUserId }, { linkedProviderIds: wyiUserId }],
     });
 
     if (!hook) {
@@ -229,7 +229,7 @@ export async function getUserWebhookLogsHandler(req: Request, res: Response): Pr
 
   try {
     const logs = await db.collection('webhook_logs')
-      .find({ wyiUserId })
+      .find({ $or: [{ wyiUserId }, { linkedProviderIds: wyiUserId }] })
       .sort({ timestamp: -1 })
       .limit(100)
       .toArray();
