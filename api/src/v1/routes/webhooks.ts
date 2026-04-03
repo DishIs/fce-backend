@@ -148,10 +148,8 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
   try {
     const hooks = await db
       .collection('webhooks')
-      .find(
-        { wyiUserId: apiUser.userId, active: true },
-        { projection: { _id: 1, inbox: 1, url: 1, createdAt: 1, failureCount: 1, secret: 0 } },
-      )
+      .find({ wyiUserId: apiUser.userId, active: true })
+      .project({ secret: 0 })
       .toArray();
 
     return res.json({ success: true, data: hooks, count: hooks.length });
