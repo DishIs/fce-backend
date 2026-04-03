@@ -105,7 +105,7 @@ export async function apiKeyAuth(
       apiKeyId:   keyDoc._id.toString(),
       plan,
       planConfig,
-      credits:    user.apiCredits ?? 0,
+      credits:    (user.apiCredits ?? 0) + (user.proBonusCredits ?? 0),
     };
 
     // 4. Cache — only cache if plan is active (not free due to expiry) to avoid

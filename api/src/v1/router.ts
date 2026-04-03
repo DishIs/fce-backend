@@ -88,7 +88,7 @@ v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {
         plan:                apiUser.plan,
         plan_label:          API_PLANS[apiUser.plan].label,
         price:               `$${API_PLANS[apiUser.plan].price}/mo`,
-        credits:             user?.apiCredits ?? 0,
+        credits:             (user?.apiCredits ?? 0) + (user?.proBonusCredits ?? 0),
         rate_limits:         apiUser.planConfig.rateLimit,
         features:            apiUser.planConfig.features,
         app_inboxes:         appInboxesList,

@@ -29,9 +29,23 @@ function firstOfNextMonth(): string {
 }
 
 async function deductCredit(userId: string): Promise<void> {
-  await db.collection('users').updateOne(
-    { wyiUserId: userId, apiCredits: { $gt: 0 } },
-    { $inc: { apiCredits: -1 } },
+  const result = await db.collection('users').findOneAndUpdate(
+    { wyiUserId: userId, $or: [{ apiCredits: { $gt: 0 } }, { proBonusCredits: { $gt: 0 } }] },
+    [
+      {
+        $set: {
+          apiCredits: { $cond: [{ $gt: ['$apiCredits', 0] }, { $subtract: ['$apiCredits', 1] }, '$apiCredits'] },
+          proBonusCredits: {
+            $cond: [
+              { $and: [{ $eq: ['$apiCredits', 0] }, { $gt: ['$proBonusCredits', 0] }] },
+              { $subtract: ['$proBonusCredits', 1] },
+              '$proBonusCredits'
+            ]
+          }
+        }
+      }
+    ],
+    { projection: { _id: 1 } },
   );
 }
 

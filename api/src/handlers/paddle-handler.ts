@@ -305,12 +305,39 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           await db.collection('users').updateOne(userQuery(userId), { $set: { hadTrial: true } });
         }
         
-        if (isNewPro && !user?.receivedProBonusCredits) {
-          await db.collection('users').updateOne(userQuery(userId), {
-            $inc: { apiCredits: 20000 },
-            $set: { receivedProBonusCredits: true },
-          });
-          console.log(`[Paddle] Added 20k bonus credits to new PRO user ${userId}.`);
+        if (isNewPro && !user?.everReceivedProBonusCredits) {
+          const userFingerprints = user?.fingerprints || [];
+          let canGiveBonus = true;
+          
+          if (userFingerprints.length > 0) {
+            const siblingWithBonus = await db.collection('users').findOne({
+              $or: [
+                { wyiUserId: { $ne: userId }, fingerprints: { $in: userFingerprints }, everReceivedProBonusCredits: true },
+                { linkedProviderIds: { $ne: userId }, fingerprints: { $in: userFingerprints }, everReceivedProBonusCredits: true },
+              ],
+            });
+            if (siblingWithBonus) {
+              canGiveBonus = false;
+              console.log(`[Paddle] User ${userId} denied bonus - sibling on same fingerprint already received it.`);
+            }
+          }
+          
+          if (canGiveBonus) {
+            await db.collection('users').updateOne(userQuery(userId), {
+              $inc: { proBonusCredits: 20000 },
+              $set: { 
+                receivedProBonusCredits: true,
+                everReceivedProBonusCredits: true,
+              },
+            });
+            console.log(`[Paddle] Added 20k bonus credits to new PRO user ${userId}.`);
+          } else {
+            await db.collection('users').updateOne(userQuery(userId), {
+              $set: { 
+                receivedProBonusCredits: true,
+              },
+            });
+          }
         }
         
         await logPaymentEvent(userId, subscriptionId!, 'subscription_created', payload);
@@ -335,10 +362,14 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
             'subscription.periodEnd':         periodEnd,
             'subscription.lastUpdated':       new Date(),
             scheduledDowngradeAt:             new Date(periodEnd),
+            apiPlan:                          'free',
+            proBonusCredits:                  0,
           },
+          $unset: { receivedProBonusCredits: '' },
         });
+        await syncUserFeatures(db, redis, userId);
         await logPaymentEvent(userId, subscriptionId!, 'subscription_cancelled', payload);
-        console.log(`[Paddle] User ${userId} cancelled. Pro until ${periodEnd}.`);
+        console.log(`[Paddle] User ${userId} cancelled. Pro until ${periodEnd}. Credits and API plan revoked.`);
 
         db.collection('users').findOne(userQuery(userId)).then(async user => {
           if (!user?.email) return;
@@ -377,9 +408,17 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
 
       case 'SUSPENDED': {
         await db.collection('users').updateOne(userQuery(userId), {
-          $set: { 'subscription.status': 'SUSPENDED', 'subscription.pausedAt': payload.pausedAt ?? new Date().toISOString(), 'subscription.lastUpdated': new Date() },
+          $set: { 
+            'subscription.status': 'SUSPENDED', 
+            'subscription.pausedAt': payload.pausedAt ?? new Date().toISOString(), 
+            'subscription.lastUpdated': new Date(),
+            apiPlan: 'free',
+            proBonusCredits: 0,
+          },
+          $unset: { receivedProBonusCredits: '' },
         });
-        console.warn(`[Paddle] User ${userId} subscription SUSPENDED.`);
+        await syncUserFeatures(db, redis, userId);
+        console.warn(`[Paddle] User ${userId} subscription SUSPENDED. Pro bonus credits revoked.`);
         break;
       }
 
@@ -397,15 +436,31 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
 
       case 'PAYMENT_FAILED': {
         await db.collection('users').updateOne(userQuery(userId), {
-          $set: { 'subscription.status': 'SUSPENDED', 'subscription.lastUpdated': new Date() },
+          $set: { 
+            'subscription.status': 'SUSPENDED', 
+            'subscription.lastUpdated': new Date(),
+            apiPlan: 'free',
+            proBonusCredits: 0,
+          },
+          $unset: { receivedProBonusCredits: '' },
         });
-        console.warn(`[Paddle] User ${userId} payment FAILED.`);
+        await syncUserFeatures(db, redis, userId);
+        console.warn(`[Paddle] User ${userId} payment FAILED. Pro bonus credits revoked.`);
         break;
       }
 
       case 'REFUNDED': {
+        await db.collection('users').updateOne(userQuery(userId), {
+          $set: { 
+            plan: 'free',
+            apiPlan: 'free',
+            proBonusCredits: 0,
+          },
+          $unset: { receivedProBonusCredits: '' },
+        });
+        await syncUserFeatures(db, redis, userId);
         await logPaymentEvent(userId, subscriptionId!, 'refund', payload);
-        console.log(`[Paddle] Refund logged for user ${userId}.`);
+        console.log(`[Paddle] Refund processed for user ${userId}. Pro bonus credits revoked.`);
         break;
       }
 

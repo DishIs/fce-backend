@@ -145,6 +145,9 @@ export interface IUser {
   apiInboxes?: string[];
   apiSubscription?: ISubscription;
   hadApiTrial?: boolean;
+  receivedProBonusCredits?: boolean;
+  everReceivedProBonusCredits?: boolean;
+  proBonusCredits?: number;
   fcmToken?: string;
 
   // ── Account deletion ──────────────────────────────────────────────────────

@@ -32,7 +32,7 @@ export async function getApiStatusHandler(req: Request, res: Response): Promise<
 
     const plan: ApiPlanName = resolveEffectivePlan(user);
     const planConfig        = API_PLANS[plan];
-    const credits: number   = user.apiCredits ?? 0;
+    const credits: number   = (user.apiCredits ?? 0) + (user.proBonusCredits ?? 0);
     const appInboxes        = Array.isArray(user.inboxes)
       ? user.inboxes.map((i: any) => String(i).toLowerCase())
       : [];
