@@ -14,12 +14,30 @@ export async function addWebhookHandler(req: Request, res: Response): Promise<an
     });
   }
 
+  const normalizedInbox = inbox.toLowerCase();
+
+  const user = await db.collection('users').findOne({
+    wyiUserId,
+    $or: [
+      { apiInboxes: normalizedInbox },
+      { inboxes: normalizedInbox },
+    ],
+  });
+
+  if (!user) {
+    return res.status(403).json({
+      success: false,
+      error: 'inbox_not_owned',
+      message: `Inbox "${inbox}" is not registered for this user.`,
+    });
+  }
+
   const secret = crypto.randomBytes(32).toString('hex');
 
   try {
     const doc = {
       wyiUserId,
-      inbox: inbox.toLowerCase(),
+      inbox: normalizedInbox,
       url,
       secret,
       createdAt: new Date(),

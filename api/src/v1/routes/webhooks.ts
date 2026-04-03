@@ -55,10 +55,13 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
     });
   }
 
-  // Verify ownership of the inbox
+  // Verify ownership of the inbox (check both apiInboxes and regular inboxes)
   const user = await db.collection('users').findOne({
     wyiUserId:  apiUser.userId,
-    apiInboxes: inbox.toLowerCase(),
+    $or: [
+      { apiInboxes: inbox.toLowerCase() },
+      { inboxes: inbox.toLowerCase() },
+    ],
   });
 
   if (!user) {
