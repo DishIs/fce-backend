@@ -57,7 +57,7 @@ import { deleteInboxHandler } from './handlers/delete-inbox-handler';
 import { attachIdentityContext, progressiveFrictionEngine } from './middlewares/abuse-engine';
 import { verifySignature } from './utils/crypto';
 import { autoChargeApiPlanHandler, autoChargeCreditsHandler } from './handlers/auto-billing-handler';
-import { getUserWebhooksHandler, getUserWebhookLogsHandler } from './handlers/internal-webhooks';
+import { getUserWebhooksHandler, getUserWebhookLogsHandler, addWebhookHandler, deleteWebhookHandler, regenerateWebhookSecretHandler } from './handlers/internal-webhooks';
 
 declare global {
   namespace Express {
@@ -253,6 +253,9 @@ connectToMongo().then(() => {
   // ── Webhooks & Stats ───────────────────────────────────────────────────────
   app.get('/user/webhooks/logs/:wyiUserId', getUserWebhookLogsHandler);
   app.get('/user/webhooks/:wyiUserId', getUserWebhooksHandler);
+  app.post('/user/webhooks', addWebhookHandler);
+  app.delete('/user/webhooks', deleteWebhookHandler);
+  app.post('/user/webhooks/regenerate-secret', regenerateWebhookSecretHandler);
 
   // ── Billing ────────────────────────────────────────────────────────────────
   app.post('/billing/auto-charge-plan', autoChargeApiPlanHandler);

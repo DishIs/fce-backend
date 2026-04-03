@@ -16,6 +16,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../../config/mongo';
 import { ObjectId } from 'mongodb';
 import { WEBHOOK_PLANS } from '../api-plans';
+import crypto from 'crypto';
 
 const router = Router();
 
@@ -69,10 +70,13 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
   }
 
   try {
+    const secret = crypto.randomBytes(32).toString('hex');
+
     const doc = {
       wyiUserId:    apiUser.userId,
       inbox:        inbox.toLowerCase(),
       url,
+      secret,
       createdAt:    new Date(),
       active:       true,
       failureCount: 0,
@@ -85,6 +89,7 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
       id:      result.insertedId.toString(),
       inbox:   doc.inbox,
       url:     doc.url,
+      secret:  secret,
     });
   } catch {
     return res.status(500).json({ success: false, error: 'server_error' });
@@ -132,7 +137,7 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
       .collection('webhooks')
       .find(
         { wyiUserId: apiUser.userId, active: true },
-        { projection: { _id: 1, inbox: 1, url: 1, createdAt: 1, failureCount: 1 } },
+        { projection: { _id: 1, inbox: 1, url: 1, createdAt: 1, failureCount: 1, secret: 0 } },
       )
       .toArray();
 
@@ -171,7 +176,10 @@ export async function notifyWebhooks(mailbox: string, event: any): Promise<void>
     const startTime = Date.now();
     fetch(hook.url, {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-Webhook-Secret': hook.secret || '',
+      },
       body:    payload,
       signal:  AbortSignal.timeout(10_000),
     })
