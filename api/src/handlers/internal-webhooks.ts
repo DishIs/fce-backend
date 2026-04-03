@@ -7,9 +7,22 @@ import crypto from 'crypto';
 async function resolveUserId(wyiUserIdOrLinkedId: string): Promise<string | null> {
   const user = await db.collection('users').findOne(
     { $or: [{ wyiUserId: wyiUserIdOrLinkedId }, { linkedProviderIds: wyiUserIdOrLinkedId }] },
-    { projection: { wyiUserId: 1 } }
+    { projection: { wyiUserId: 1, linkedProviderIds: 1 } }
   );
   return user?.wyiUserId || null;
+}
+
+async function getUserAndLinkedIds(wyiUserIdOrLinkedId: string): Promise<string[] | null> {
+  const user = await db.collection('users').findOne(
+    { $or: [{ wyiUserId: wyiUserIdOrLinkedId }, { linkedProviderIds: wyiUserIdOrLinkedId }] },
+    { projection: { wyiUserId: 1, linkedProviderIds: 1 } }
+  );
+  if (!user) return null;
+  const ids = [user.wyiUserId];
+  if (user.linkedProviderIds && user.linkedProviderIds.length > 0) {
+    ids.push(...user.linkedProviderIds);
+  }
+  return ids;
 }
 
 export async function addWebhookHandler(req: Request, res: Response): Promise<any> {
@@ -189,8 +202,8 @@ export async function getUserWebhooksHandler(req: Request, res: Response): Promi
     });
   }
 
-  const canonicalUserId = await resolveUserId(wyiUserId);
-  if (!canonicalUserId) {
+  const userIds = await getUserAndLinkedIds(wyiUserId);
+  if (!userIds) {
     return res.status(404).json({
       success: false,
       error: 'user_not_found',
@@ -200,7 +213,7 @@ export async function getUserWebhooksHandler(req: Request, res: Response): Promi
 
   try {
     const hooks = await db.collection('webhooks')
-      .find({ wyiUserId: canonicalUserId })
+      .find({ wyiUserId: { $in: userIds } })
       .project({ secret: 0 })
       .toArray();
     return res.json({ success: true, data: hooks });
@@ -280,8 +293,8 @@ export async function getUserWebhookLogsHandler(req: Request, res: Response): Pr
     });
   }
 
-  const canonicalUserId = await resolveUserId(wyiUserId);
-  if (!canonicalUserId) {
+  const userIds = await getUserAndLinkedIds(wyiUserId);
+  if (!userIds) {
     return res.status(404).json({
       success: false,
       error: 'user_not_found',
@@ -291,7 +304,7 @@ export async function getUserWebhookLogsHandler(req: Request, res: Response): Pr
 
   try {
     const logs = await db.collection('webhook_logs')
-      .find({ wyiUserId: canonicalUserId })
+      .find({ wyiUserId: { $in: userIds } })
       .sort({ timestamp: -1 })
       .limit(100)
       .toArray();
