@@ -17,6 +17,7 @@ import { db } from '../../config/mongo';
 import { ObjectId } from 'mongodb';
 import { WEBHOOK_PLANS } from '../api-plans';
 import crypto from 'crypto';
+import { client as redis } from '../../config/redis';
 
 const router = Router();
 
@@ -171,6 +172,26 @@ export default router;
 //  Auto-disables hooks that fail 10+ times consecutively.
 // ─────────────────────────────────────────────────────────────────────────────
 export async function notifyWebhooks(mailbox: string, event: any): Promise<void> {
+  const messageId = event.id || event.messageId;
+  if (!messageId) {
+    console.error('[webhooks] Missing messageId in event, skipping');
+    return;
+  }
+
+  const deduplicationKey = `webhook:sent:${messageId}:${mailbox}`;
+  try {
+    const setResult = await redis.set(deduplicationKey, '1', {
+      NX: true,
+      EX: 3600,
+    });
+    if (!setResult) {
+      console.log(`[webhooks] Skipping duplicate message ${messageId}`);
+      return;
+    }
+  } catch (err) {
+    console.error('[webhooks] Deduplication check failed:', err);
+  }
+
   let hooks: any[];
 
   try {
