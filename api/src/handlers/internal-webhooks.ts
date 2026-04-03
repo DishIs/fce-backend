@@ -10,17 +10,19 @@ export async function addWebhookHandler(req: Request, res: Response): Promise<an
   if (!wyiUserId || !url || !inbox) {
     return res.status(400).json({
       success: false,
+      error: 'missing_fields',
       message: 'wyiUserId, url, and inbox are required',
     });
   }
 
-  const normalizedInbox = inbox.toLowerCase();
+  const normalizedInbox = String(inbox).trim().toLowerCase();
 
   const user = await db.collection('users').findOne({
-    wyiUserId,
     $or: [
-      { apiInboxes: normalizedInbox },
-      { inboxes: normalizedInbox },
+      { wyiUserId, apiInboxes: normalizedInbox },
+      { wyiUserId, inboxes: normalizedInbox },
+      { linkedProviderIds: wyiUserId, apiInboxes: normalizedInbox },
+      { linkedProviderIds: wyiUserId, inboxes: normalizedInbox },
     ],
   });
 
@@ -55,7 +57,11 @@ export async function addWebhookHandler(req: Request, res: Response): Promise<an
       secret: secret,
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({
+      success: false,
+      error: 'server_error',
+      message: err.message,
+    });
   }
 }
 
@@ -65,6 +71,7 @@ export async function deleteWebhookHandler(req: Request, res: Response): Promise
   if (!wyiUserId || !webhookId) {
     return res.status(400).json({
       success: false,
+      error: 'missing_fields',
       message: 'wyiUserId and webhookId are required',
     });
   }
@@ -78,13 +85,21 @@ export async function deleteWebhookHandler(req: Request, res: Response): Promise
     if (result.deletedCount === 0) {
       return res.status(404).json({
         success: false,
+        error: 'not_found',
         message: 'Webhook not found or does not belong to this user.',
       });
     }
 
-    return res.json({ success: true, message: 'Webhook deleted.' });
+    return res.json({
+      success: true,
+      message: 'Webhook deleted.',
+    });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({
+      success: false,
+      error: 'server_error',
+      message: err.message,
+    });
   }
 }
 
@@ -94,6 +109,7 @@ export async function regenerateWebhookSecretHandler(req: Request, res: Response
   if (!wyiUserId || !webhookId) {
     return res.status(400).json({
       success: false,
+      error: 'missing_fields',
       message: 'wyiUserId and webhookId are required',
     });
   }
@@ -110,6 +126,7 @@ export async function regenerateWebhookSecretHandler(req: Request, res: Response
     if (!result) {
       return res.status(404).json({
         success: false,
+        error: 'not_found',
         message: 'Webhook not found or does not belong to this user.',
       });
     }
@@ -119,13 +136,23 @@ export async function regenerateWebhookSecretHandler(req: Request, res: Response
       secret: newSecret,
     });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({
+      success: false,
+      error: 'server_error',
+      message: err.message,
+    });
   }
 }
 
 export async function getUserWebhooksHandler(req: Request, res: Response): Promise<any> {
   const { wyiUserId } = req.params;
-  if (!wyiUserId) return res.status(400).json({ success: false, message: 'wyiUserId is required' });
+  if (!wyiUserId) {
+    return res.status(400).json({
+      success: false,
+      error: 'missing_fields',
+      message: 'wyiUserId is required',
+    });
+  }
 
   try {
     const hooks = await db.collection('webhooks')
@@ -134,13 +161,23 @@ export async function getUserWebhooksHandler(req: Request, res: Response): Promi
       .toArray();
     return res.json({ success: true, data: hooks });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({
+      success: false,
+      error: 'server_error',
+      message: err.message,
+    });
   }
 }
 
 export async function getUserWebhookLogsHandler(req: Request, res: Response): Promise<any> {
   const { wyiUserId } = req.params;
-  if (!wyiUserId) return res.status(400).json({ success: false, message: 'wyiUserId is required' });
+  if (!wyiUserId) {
+    return res.status(400).json({
+      success: false,
+      error: 'missing_fields',
+      message: 'wyiUserId is required',
+    });
+  }
 
   try {
     const logs = await db.collection('webhook_logs')
@@ -148,9 +185,13 @@ export async function getUserWebhookLogsHandler(req: Request, res: Response): Pr
       .sort({ timestamp: -1 })
       .limit(100)
       .toArray();
-      
+       
     return res.json({ success: true, data: logs });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({
+      success: false,
+      error: 'server_error',
+      message: err.message,
+    });
   }
 }

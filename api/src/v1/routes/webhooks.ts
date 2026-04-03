@@ -57,10 +57,11 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
 
   // Verify ownership of the inbox (check both apiInboxes and regular inboxes)
   const user = await db.collection('users').findOne({
-    wyiUserId:  apiUser.userId,
     $or: [
-      { apiInboxes: inbox.toLowerCase() },
-      { inboxes: inbox.toLowerCase() },
+      { wyiUserId: apiUser.userId, apiInboxes: inbox.toLowerCase() },
+      { wyiUserId: apiUser.userId, inboxes: inbox.toLowerCase() },
+      { linkedProviderIds: apiUser.userId, apiInboxes: inbox.toLowerCase() },
+      { linkedProviderIds: apiUser.userId, inboxes: inbox.toLowerCase() },
     ],
   });
 
@@ -94,8 +95,12 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
       url:     doc.url,
       secret:  secret,
     });
-  } catch {
-    return res.status(500).json({ success: false, error: 'server_error' });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'server_error',
+      message: err.message,
+    });
   }
 });
 
@@ -123,8 +128,12 @@ router.delete('/:id', async (req: Request, res: Response): Promise<any> => {
     }
 
     return res.json({ success: true, message: 'Webhook unregistered.' });
-  } catch {
-    return res.status(500).json({ success: false, error: 'server_error' });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'server_error',
+      message: err.message,
+    });
   }
 });
 
@@ -145,8 +154,12 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
       .toArray();
 
     return res.json({ success: true, data: hooks, count: hooks.length });
-  } catch {
-    return res.status(500).json({ success: false, error: 'server_error' });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'server_error',
+      message: err.message,
+    });
   }
 });
 
