@@ -174,7 +174,6 @@ export default router;
 export async function notifyWebhooks(mailbox: string, event: any): Promise<void> {
   const messageId = event.id || event.messageId;
   if (!messageId) {
-    console.error('[webhooks] Missing messageId in event, skipping');
     return;
   }
 
@@ -185,7 +184,6 @@ export async function notifyWebhooks(mailbox: string, event: any): Promise<void>
       EX: 3600,
     });
     if (!setResult) {
-      console.log(`[webhooks] Skipping duplicate message ${messageId}`);
       return;
     }
   } catch (err) {
@@ -209,7 +207,6 @@ export async function notifyWebhooks(mailbox: string, event: any): Promise<void>
   const payload = JSON.stringify(event);
 
   for (const hook of hooks) {
-    // Fire and forget logging logic
     const startTime = Date.now();
     fetch(hook.url, {
       method:  'POST',
@@ -222,10 +219,14 @@ export async function notifyWebhooks(mailbox: string, event: any): Promise<void>
     })
       .then(async (res) => {
         const success = res.ok;
-        await logWebhookEvent(hook, 'email.received', success ? 'success' : 'failed', res.status);
+        const duration = Date.now() - startTime;
+        await logWebhookEvent(hook, 'email.received', success ? 'success' : 'failed', res.status, {
+          subject: event.subject,
+          from: event.from,
+          duration,
+        });
         
         if (success) {
-          // Reset failure counter on successful delivery
           if (hook.failureCount > 0) {
             await db.collection('webhooks').updateOne(
               { _id: hook._id },
@@ -237,14 +238,19 @@ export async function notifyWebhooks(mailbox: string, event: any): Promise<void>
         }
       })
       .catch(async (err) => {
-        console.error(`[webhooks] Delivery failed for hook ${hook._id}:`, err.message);
-        await logWebhookEvent(hook, 'email.received', 'failed', 0);
+        const duration = Date.now() - startTime;
+        await logWebhookEvent(hook, 'email.received', 'failed', 0, {
+          subject: event.subject,
+          from: event.from,
+          duration,
+          error: err.message,
+        });
         await incrementFailure(hook);
       });
   }
 }
 
-async function logWebhookEvent(hook: any, eventType: string, status: 'success' | 'failed' | 'retrying', statusCode: number) {
+async function logWebhookEvent(hook: any, eventType: string, status: 'success' | 'failed' | 'retrying', statusCode: number, metadata?: { subject?: string; from?: string; duration?: number; error?: string }) {
   try {
     await db.collection('webhook_logs').insertOne({
       webhookId: hook._id,
@@ -254,10 +260,11 @@ async function logWebhookEvent(hook: any, eventType: string, status: 'success' |
       status,
       responseCode: statusCode,
       timestamp: new Date(),
-      retryCount: hook.failureCount || 0
+      retryCount: hook.failureCount || 0,
+      ...metadata,
     });
   } catch (err) {
-    // Ignore log errors to not block flow
+    console.error('[webhooks] Failed to log webhook event:', err);
   }
 }
 
