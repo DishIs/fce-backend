@@ -214,9 +214,23 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
     const user = await db.collection('users').findOne({ wyiUserId: apiUser.userId });
     if (!user) return res.status(404).json({ success: false, error: 'user_not_found' });
 
+    // ── Enforce max inboxes limit ───────────────────────────────────────────
+    const maxInboxes = apiUser.planConfig.features.maxInboxes;
+    const currentInboxCount = (user.apiInboxes || []).length;
+    
+    // Check if the user is trying to add a new inbox (not already registered)
     const already = (user.apiInboxes ?? []).includes(normalized);
     if (already) {
       return res.json({ success: true, message: 'Inbox already registered.', inbox: normalized });
+    }
+
+    if (maxInboxes > 0 && currentInboxCount >= maxInboxes) {
+      return res.status(403).json({
+        success: false,
+        error: 'inbox_limit_reached',
+        message: `Your plan (${apiUser.planConfig.label}) is limited to ${maxInboxes} registered inboxes. Upgrade your plan to add more inboxes.`,
+        upgrade_url: 'https://freecustom.email/api/pricing',
+      });
     }
 
     await db.collection('users').updateOne(

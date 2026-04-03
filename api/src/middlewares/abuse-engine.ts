@@ -139,7 +139,7 @@ export const attachIdentityContext = (req: Request, res: Response, next: NextFun
     next();
   } catch (err: any) {
     logCriticalError(err, req, { context: 'attachIdentityContext' });
-    next();
+    return res.status(500).json({ success: false, error: 'internal_error', message: 'Identity check failed due to internal error.' });
   }
 };
 
@@ -267,6 +267,6 @@ export const progressiveFrictionEngine = async (
     next();
   } catch (err: any) {
     logCriticalError(err, req, { context: 'progressiveFrictionEngine' });
-    next();
+    return res.status(500).json({ success: false, error: 'internal_error', message: 'Abuse check failed due to internal error.' });
   }
 };

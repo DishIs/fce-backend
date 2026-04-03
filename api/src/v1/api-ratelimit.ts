@@ -148,7 +148,11 @@ export async function apiRateLimit(req: Request, res: Response, next: NextFuncti
     res.setHeader('X-RateLimit-Remaining-Month',   Math.max(0, requestsPerMonth - monthCount));
     return next();
   } catch (err) {
-    console.error('[api-ratelimit] Redis error (failing open):', err);
-    return next();
+    console.error('[api-ratelimit] Redis error (failing closed to prevent bypass):', err);
+    return res.status(500).json({
+      success: false,
+      error: 'internal_error',
+      message: 'Rate limit verification failed due to internal error.'
+    });
   }
 }

@@ -169,6 +169,54 @@ export async function getUserWebhooksHandler(req: Request, res: Response): Promi
   }
 }
 
+export async function getWebhookByIdHandler(req: Request, res: Response): Promise<any> {
+  const { wyiUserId, webhookId } = req.params;
+  if (!wyiUserId || !webhookId) {
+    return res.status(400).json({
+      success: false,
+      error: 'missing_fields',
+      message: 'wyiUserId and webhookId are required',
+    });
+  }
+
+  try {
+    const hook = await db.collection('webhooks').findOne({
+      _id: new ObjectId(webhookId),
+      wyiUserId,
+    });
+
+    if (!hook) {
+      return res.status(404).json({
+        success: false,
+        error: 'not_found',
+        message: 'Webhook not found or does not belong to this user.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        id: hook._id,
+        wyiUserId: hook.wyiUserId,
+        inbox: hook.inbox,
+        url: hook.url,
+        secret: hook.secret,
+        active: hook.active,
+        failureCount: hook.failureCount,
+        createdAt: hook.createdAt,
+        disabledAt: hook.disabledAt,
+        disabledReason: hook.disabledReason,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      error: 'server_error',
+      message: err.message,
+    });
+  }
+}
+
 export async function getUserWebhookLogsHandler(req: Request, res: Response): Promise<any> {
   const { wyiUserId } = req.params;
   if (!wyiUserId) {

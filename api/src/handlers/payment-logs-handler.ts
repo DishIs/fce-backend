@@ -108,9 +108,17 @@ export async function getPaymentLogsHandler(req: Request, res: Response): Promis
   }
 
   // Optional query params
-  const limit  = Math.min(parseInt((req.query.limit  as string) ?? '50',  10), 200);
-  const offset = Math.max(parseInt((req.query.offset as string) ?? '0',   10), 0);
-  const type   = req.query.type as string | undefined; // 'app' | 'api' | 'credits'
+  const limitStr = req.query.limit as string;
+  const offsetStr = req.query.offset as string;
+  
+  let limit = parseInt(limitStr || '50', 10);
+  if (isNaN(limit) || limit < 1) limit = 50;
+  limit = Math.min(limit, 200);
+
+  let offset = parseInt(offsetStr || '0', 10);
+  if (isNaN(offset) || offset < 0) offset = 0;
+
+  const type = req.query.type as string | undefined; // 'app' | 'api' | 'credits'
 
   try {
     const user = await db.collection('users').findOne({
