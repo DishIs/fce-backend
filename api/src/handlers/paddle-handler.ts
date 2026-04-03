@@ -292,13 +292,27 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           ...(payload.nextBilledAt && { nextBilledAt: payload.nextBilledAt }),
           ...(payload.scheduledChange && { scheduledChange: payload.scheduledChange }),
         };
+        
+        const user = await db.collection('users').findOne(userQuery(userId));
+        const isNewPro = user?.plan !== 'pro';
+        
         await db.collection('users').updateOne(userQuery(userId), {
           $set: { plan: 'pro', subscription: subscriptionData },
           $unset: { scheduledDowngradeAt: '' },
         });
+        
         if (rawStatus === 'TRIALING') {
           await db.collection('users').updateOne(userQuery(userId), { $set: { hadTrial: true } });
         }
+        
+        if (isNewPro && !user?.receivedProBonusCredits) {
+          await db.collection('users').updateOne(userQuery(userId), {
+            $inc: { apiCredits: 20000 },
+            $set: { receivedProBonusCredits: true },
+          });
+          console.log(`[Paddle] Added 20k bonus credits to new PRO user ${userId}.`);
+        }
+        
         await logPaymentEvent(userId, subscriptionId!, 'subscription_created', payload);
         console.log(`[Paddle] User ${userId} upgraded to PRO.`);
         migrateUserEmailsToPro(userId).catch(err =>
