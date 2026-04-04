@@ -267,19 +267,6 @@ function createFceMcpServer(apiKey: string) {
     }
   });
 
-  server.tool("create_inbox", {
-    inbox: z.string().describe("The full email address to register (e.g. mybox@ditube.info)"),
-  }, async ({ inbox }) => {
-    try {
-      console.log('[MCP] create_inbox called:', inbox);
-      const response = await apiClient.post(`/inboxes`, { inbox });
-      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
-    } catch (error) {
-      console.log('[MCP] create_inbox error:', error);
-      return { content: [{ type: "text", text: formatError(error) }], isError: true };
-    }
-  });
-
   return server;
 }
 
