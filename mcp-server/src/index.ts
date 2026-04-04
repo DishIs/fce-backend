@@ -91,6 +91,7 @@ async function main() {
     const app = express();
     app.use(cors());
     app.use(express.json());
+    app.use(express.urlencoded({ extended: true }));
     
     // Store active SSE transports
     const transports = new Map<string, SSEServerTransport>();
@@ -118,6 +119,10 @@ async function main() {
       const clientId = req.query.client_id as string;
       const redirectUri = req.query.redirect_uri as string;
       const state = req.query.state as string;
+      const codeChallenge = req.query.code_challenge as string;
+      const codeChallengeMethod = req.query.code_challenge_method as string;
+
+      console.log('[OAuth] Authorize request:', { clientId: clientId?.substring(0, 10), redirectUri, hasCodeChallenge: !!codeChallenge });
 
       if (!clientId || !redirectUri) {
         return res.status(400).json({ error: 'invalid_request', error_description: 'Missing required parameters' });
@@ -137,6 +142,7 @@ async function main() {
       redirectUrl.searchParams.set('code', authCode);
       if (state) redirectUrl.searchParams.set('state', state);
 
+      console.log('[OAuth] Redirecting to:', redirectUrl.toString().substring(0, 50));
       res.redirect(redirectUrl.toString());
     });
 
@@ -147,8 +153,12 @@ async function main() {
       const clientId = req.body.client_id;
       const clientSecret = req.body.client_secret;
 
+      console.log('[OAuth] Token request:', { grantType, code: code?.substring(0, 8), clientId: clientId?.substring(0, 10) });
+
       if (grantType === 'authorization_code') {
         const stored = tokenStore.get(code);
+        console.log('[OAuth] Stored token:', stored ? 'found' : 'not found');
+        
         if (!stored) {
           return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired code' });
         }
@@ -159,6 +169,8 @@ async function main() {
         // Clean up the auth code
         tokenStore.delete(code);
 
+        console.log('[OAuth] Returning access token:', accessToken?.substring(0, 10));
+        
         res.json({
           access_token: accessToken,
           token_type: 'Bearer',
