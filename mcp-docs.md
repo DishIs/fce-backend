@@ -68,14 +68,37 @@ Generates a random inbox on our premium domains and holds the connection open un
 
 ---
 
-## SSE Hosting (Cloud-Based AI Agents)
+## MCP Hosting (Cloud-Based AI Agents)
 
-For cloud-based AI platforms that cannot run local commands (like Claude Web, OpenAI Playground, Replit Agent, etc.), we provide a hosted SSE endpoint.
+For cloud-based AI platforms that cannot run local commands (like Claude Web, Claude Desktop, Cursor, etc.), we provide hosted MCP endpoints.
+
+We support **two transport protocols**:
+
+1. **Streamable HTTP** (Recommended) - New MCP standard, better for modern clients
+2. **SSE** - Legacy support for clients that require Server-Sent Events
 
 ### Base URL
 ```
 https://mcp.freecustom.email
 ```
+
+### Endpoints
+
+| Endpoint | Method | Transport | Description |
+| :--- | :--- | :--- | :--- |
+| `/mcp` | POST | Streamable HTTP | Primary MCP endpoint (recommended) |
+| `/mcp` | GET | Streamable HTTP | Initial MCP connection |
+| `/sse` | GET | SSE | Legacy SSE endpoint |
+| `/messages` | POST | SSE | Send messages (SSE only) |
+| `/authorize` | GET | OAuth | OAuth authorization |
+| `/token` | POST | OAuth | OAuth token exchange |
+| `/.well-known/oauth-authorization-server` | GET | OAuth | OAuth metadata |
+
+### Which endpoint should I use?
+
+- **Claude Web / Modern clients**: Use `/mcp` (Streamable HTTP)
+- **Claude Desktop / Legacy clients**: Use `/sse` (SSE)
+- Both support the same authentication methods
 
 ### Authentication
 
@@ -121,15 +144,24 @@ The OAuth metadata is available at:
 GET /.well-known/oauth-authorization-server
 ```
 
-### Endpoints
+---
 
-| Endpoint | Method | Description |
-| :--- | :--- | :--- |
-| `/sse` | GET | Establish SSE connection for real-time MCP communication |
-| `/messages` | POST | Send JSON-RPC messages to the MCP server |
-| `/authorize` | GET | OAuth authorization endpoint |
-| `/token` | POST | OAuth token exchange endpoint |
-| `/.well-known/oauth-authorization-server` | GET | OAuth metadata |
+### Connecting with Streamable HTTP (`/mcp`)
+
+**Request:**
+```http
+POST /mcp HTTP/1.1
+Host: mcp.freecustom.email
+Authorization: Bearer YOUR_API_KEY
+Content-Type: application/json
+
+{"jsonrpc": "2.0", "method": "initialize", ...}
+```
+
+**Response:**
+```json
+{"jsonrpc": "2.0", "result": {"protocolVersion": "2024-11-05", "serverInfo": {...}, "capabilities": {}}, "id": 1}
+```
 
 ---
 
