@@ -9,6 +9,7 @@ import cors from 'cors';
 import crypto from 'crypto';
 
 const BASE_URL = process.env.FCE_API_URL || 'https://api2.freecustom.email/v1/mcp';
+const INTERNAL_API_KEY = process.env.INTERNAL_API_KEY || '';
 
 // Helper for error formatting
 function formatError(error: unknown) {
@@ -23,6 +24,19 @@ function formatError(error: unknown) {
     return `API error: ${apiError}`;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+// Verify API key with backend
+async function verifyApiKey(apiKey: string): Promise<{ valid: boolean; userId?: string; plan?: string }> {
+  try {
+    const response = await axios.get(`${BASE_URL.replace('/v1/mcp', '')}/v1/mcp/status`, {
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      timeout: 10000
+    });
+    return { valid: true, userId: response.data?.userId, plan: response.data?.plan };
+  } catch (error) {
+    return { valid: false };
+  }
 }
 
 // Wrap server creation in a function for multi-tenancy in SSE
@@ -163,13 +177,23 @@ async function main() {
           return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired code' });
         }
 
-        // The access token IS the API key (simplified flow)
-        const accessToken = stored.apiKey;
+        const apiKeyToVerify = stored.apiKey;
+        console.log('[OAuth] Verifying API key:', apiKeyToVerify?.substring(0, 10));
+        
+        // Verify the API key is valid before returning token
+        const verification = await verifyApiKey(apiKeyToVerify);
+        if (!verification.valid) {
+          console.log('[OAuth] Invalid API key - rejecting');
+          return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid API key' });
+        }
+
+        // The access token IS the verified API key
+        const accessToken = apiKeyToVerify;
         
         // Clean up the auth code
         tokenStore.delete(code);
 
-        console.log('[OAuth] Returning access token:', accessToken?.substring(0, 10));
+        console.log('[OAuth] Returning access token for user:', verification.userId, 'plan:', verification.plan);
         
         res.json({
           access_token: accessToken,
@@ -197,6 +221,15 @@ async function main() {
         return;
       }
 
+      // Verify the API key is valid
+      const verification = await verifyApiKey(apiKey);
+      if (!verification.valid) {
+        console.log('[SSE] Invalid API key:', apiKey?.substring(0, 10));
+        res.status(401).json({ error: 'invalid_api_key', message: 'Invalid or expired API key' });
+        return;
+      }
+
+      console.log('[SSE] Valid API key for user:', verification.userId, 'plan:', verification.plan);
       console.log('New SSE connection established');
       const transport = new SSEServerTransport('/messages', res);
       const server = createFceMcpServer(apiKey);

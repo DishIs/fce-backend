@@ -31,6 +31,16 @@ router.use((req: Request, res: Response, next: NextFunction): any => {
   next();
 });
 
+// ── MCP Status Endpoint (for OAuth token verification) ───────────────────
+router.get('/status', (req: Request, res: Response) => {
+  const apiUser = req.apiUser!;
+  res.json({
+    userId: apiUser.userId,
+    plan: apiUser.plan,
+    mcpEnabled: apiUser.planConfig.features.mcpEnabled,
+  });
+});
+
 // ── MCP Specific Rate Limiting (Ops/Min) ─────────────────────────────────────
 router.use(async (req: Request, res: Response, next: NextFunction): Promise<any> => {
   const apiUser = req.apiUser!;
