@@ -69,7 +69,7 @@ v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {
   try {
     const user = await db.collection('users').findOne(
       { wyiUserId: apiUser.userId },
-      { projection: { wyiUserId: 1, email: 1, apiPlan: 1, apiCredits: 1, apiInboxes: 1, inboxes: 1, customDomains: 1 } },
+      { projection: { wyiUserId: 1, email: 1, apiPlan: 1, apiCredits: 1, proBonusCredits: 1, apiInboxes: 1, inboxes: 1, customDomains: 1 } },
     );
     const appInboxesList = Array.isArray(user?.inboxes)
       ? user.inboxes.map((i: any) => String(i).toLowerCase())

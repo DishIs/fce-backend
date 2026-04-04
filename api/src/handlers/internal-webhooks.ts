@@ -3,6 +3,8 @@ import { Request, Response } from 'express';
 import { db } from '../config/mongo';
 import { ObjectId } from 'mongodb';
 import crypto from 'crypto';
+import { WEBHOOK_PLANS } from '../v1/api-plans';
+import { resolveEffectivePlan } from '../v1/resolve-plan';
 
 async function resolveUserId(wyiUserIdOrLinkedId: string): Promise<string | null> {
   const user = await db.collection('users').findOne(
@@ -61,6 +63,17 @@ export async function addWebhookHandler(req: Request, res: Response): Promise<an
       success: false,
       error: 'inbox_not_owned',
       message: `Inbox "${inbox}" is not registered for this user.`,
+    });
+  }
+
+  const effectivePlan = resolveEffectivePlan(user);
+  if (!WEBHOOK_PLANS.includes(effectivePlan as any)) {
+    return res.status(403).json({
+      success: false,
+      error: 'plan_required',
+      message: `Webhook subscriptions require Growth plan ($49/mo) or above. Your plan: ${effectivePlan}.`,
+      upgrade_required: true,
+      recommended_plan: 'growth',
     });
   }
 
