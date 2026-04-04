@@ -27,6 +27,17 @@ The MCP layer is a premium feature, restricted to our higher-tier plans:
 
 *Note: If a restricted plan attempts to use the MCP endpoints, a specific upgrade hint (`{"error": "MCP not available on your plan", "upgrade": "Growth required"}`) is returned.*
 
+### Important: OAuth Works with All Plans
+
+The OAuth authentication flow works with **any valid API key** (including Free plans). This allows you to connect to the MCP server and see available tools. However, actually **executing MCP tools requires a Growth or Enterprise plan**.
+
+If you're on a Free/Developer/Startup plan:
+- ✅ OAuth connection succeeds
+- ✅ Token exchange works
+- ❌ Using any MCP tool returns: `{"error": "MCP not available on your plan", "upgrade": "Growth required"}`
+
+This is intentional - you can connect your API key and see the tools available, but you'll need to upgrade to use them.
+
 ## Advanced Pricing & Billing
 
 Because MCP tools perform advanced processing (combining authentication, inbox creation, listening, and extracting), **MCP requests consume higher credits** than normal API operations.
