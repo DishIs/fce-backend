@@ -259,10 +259,13 @@ async function main() {
       (global as any).mcpAuth[apiKey] = verification;
 
       console.log('[SSE] Valid API key for user:', verification.userId, 'plan:', verification.plan, 'mcpEnabled:', verification.mcpEnabled);
-      console.log('New SSE connection established');
+      console.log('New SSE connection established, creating MCP server...');
       const transport = new SSEServerTransport('/messages', res);
+      console.log('[SSE] Transport created, connecting server...');
       const server = createFceMcpServer(apiKey, verification);
+      console.log('[SSE] Server created, calling connect...');
       await server.connect(transport);
+      console.log('[SSE] Server connected successfully');
       
       transports.set(transport.sessionId, transport);
       req.on('close', () => {
