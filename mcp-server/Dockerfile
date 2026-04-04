@@ -10,8 +10,8 @@ RUN npm run build
 
 # Default to SSE mode for Docker
 ENV TRANSPORT=sse
-ENV PORT=3000
+ENV PORT=3001
 
-EXPOSE 3000
+EXPOSE 3001
 
 CMD ["npm", "start"]

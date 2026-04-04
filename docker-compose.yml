@@ -6,16 +6,16 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx:/nginx # scripts live here now
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/reload.sh:/nginx/reload.sh:ro
       - certs:/etc/letsencrypt
       - ./certbot-webroot:/var/www/certbot
     restart: unless-stopped
     command: >
       /bin/sh -c "
-        # background wizard that swaps configs when certs appear ✨
+        chmod +x /nginx/reload.sh
         /nginx/reload.sh &
-        # nginx never dies (hopefully)
         nginx -g 'daemon off;'
       "
 
@@ -39,12 +39,13 @@ services:
     restart: unless-stopped
     environment:
       - TRANSPORT=sse
-      - PORT=3000
+      - PORT=3001
       - FCE_API_URL=${FCE_API_URL:-https://api2.freecustom.email/v1/mcp}
     expose:
-      - "3000"
+      - "3001"
     depends_on:
       - redis
+      - nginx
 
   certbot-renew:
     image: certbot/certbot
