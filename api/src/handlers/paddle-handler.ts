@@ -92,9 +92,10 @@ async function handleApiPlanEvent(
 
   switch (eventType) {
 
+    case 'TRIALING':
     case 'ACTIVATED': {
       const rawStatus  = normStatus(payload.status);
-      const isTrialing = rawStatus === 'TRIALING';
+      const isTrialing = rawStatus === 'TRIALING' || eventType === 'TRIALING';
       await db.collection('users').updateOne(userQuery(userId), {
         $set: {
           apiPlan,
@@ -278,12 +279,13 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
     // ── App Pro plan ──────────────────────────────────────────────────────────
     switch (eventType) {
 
+      case 'TRIALING':
       case 'ACTIVATED': {
         const rawStatus = normStatus(payload.status);
         const subscriptionData: ISubscription = {
           provider: 'paddle', subscriptionId: subscriptionId!,
           planId: payload.priceId,
-          status: rawStatus === 'TRIALING' ? 'TRIALING' : 'ACTIVE',
+          status: (rawStatus === 'TRIALING' || eventType === 'TRIALING') ? 'TRIALING' : 'ACTIVE',
           cancelAtPeriodEnd: false,
           startTime:   payload.startTime ?? new Date().toISOString(),
           payerEmail:  payload.payerEmail,
@@ -301,7 +303,7 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
           $unset: { scheduledDowngradeAt: '' },
         });
         
-        if (rawStatus === 'TRIALING' || payload.status?.toLowerCase() === 'trialing') {
+        if (rawStatus === 'TRIALING' || eventType === 'TRIALING' || payload.status?.toLowerCase() === 'trialing') {
           await db.collection('users').updateOne(userQuery(userId), { $set: { hadTrial: true } });
         }
         
