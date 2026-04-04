@@ -27,20 +27,39 @@ function formatError(error: unknown) {
 }
 
 // Verify API key with backend
-async function verifyApiKey(apiKey: string): Promise<{ valid: boolean; userId?: string; plan?: string }> {
+async function verifyApiKey(apiKey: string): Promise<{ valid: boolean; userId?: string; plan?: string; mcpEnabled?: boolean }> {
   try {
-    const response = await axios.get(`${BASE_URL.replace('/v1/mcp', '')}/v1/mcp/status`, {
+    const baseUrl = BASE_URL.replace('/v1/mcp', '');
+    const response = await axios.get(`${baseUrl}/v1/mcp/status`, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
       timeout: 10000
     });
-    return { valid: true, userId: response.data?.userId, plan: response.data?.plan };
+    return { 
+      valid: true, 
+      userId: response.data?.userId, 
+      plan: response.data?.plan,
+      mcpEnabled: response.data?.mcpEnabled 
+    };
   } catch (error) {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      return { valid: false }; // Invalid API key
+    }
+    // For other errors (like 403 for non-growth plans), still return valid but with plan info
+    if (axios.isAxiosError(error) && error.response?.status === 403) {
+      const data = error.response?.data;
+      return { 
+        valid: true, 
+        userId: data?.userId, 
+        plan: data?.plan,
+        mcpEnabled: false 
+      };
+    }
     return { valid: false };
   }
 }
 
 // Wrap server creation in a function for multi-tenancy in SSE
-function createFceMcpServer(apiKey: string) {
+function createFceMcpServer(apiKey: string, verification?: { valid: boolean; userId?: string; plan?: string; mcpEnabled?: boolean }) {
   const server = new McpServer({
     name: "fce-mcp",
     version: "1.0.8"
@@ -177,29 +196,29 @@ async function main() {
           return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired code' });
         }
 
-        const apiKeyToVerify = stored.apiKey;
-        console.log('[OAuth] Verifying API key:', apiKeyToVerify?.substring(0, 10));
-        
-        // Verify the API key is valid before returning token
-        const verification = await verifyApiKey(apiKeyToVerify);
-        if (!verification.valid) {
-          console.log('[OAuth] Invalid API key - rejecting');
-          return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid API key' });
-        }
+      const apiKeyToVerify = stored.apiKey;
+      console.log('[OAuth] Verifying API key:', apiKeyToVerify?.substring(0, 10));
+      
+      // Verify the API key is valid (even if MCP not enabled on their plan)
+      const verification = await verifyApiKey(apiKeyToVerify);
+      if (!verification.valid) {
+        console.log('[OAuth] Invalid API key - rejecting');
+        return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid API key' });
+      }
 
-        // The access token IS the verified API key
-        const accessToken = apiKeyToVerify;
-        
-        // Clean up the auth code
-        tokenStore.delete(code);
+      // The access token IS the verified API key
+      const accessToken = apiKeyToVerify;
+      
+      // Clean up the auth code
+      tokenStore.delete(code);
 
-        console.log('[OAuth] Returning access token for user:', verification.userId, 'plan:', verification.plan);
-        
-        res.json({
-          access_token: accessToken,
-          token_type: 'Bearer',
-          expires_in: 31536000, // 1 year for API key based auth
-        });
+      console.log('[OAuth] Returning access token for user:', verification.userId, 'plan:', verification.plan, 'mcpEnabled:', verification.mcpEnabled);
+      
+      res.json({
+        access_token: accessToken,
+        token_type: 'Bearer',
+        expires_in: 31536000, // 1 year for API key based auth
+      });
       } else {
         res.status(400).json({ error: 'unsupported_grant_type', error_description: 'Only authorization_code grant supported' });
       }
@@ -229,10 +248,14 @@ async function main() {
         return;
       }
 
-      console.log('[SSE] Valid API key for user:', verification.userId, 'plan:', verification.plan);
+      // Store verification result in global for later use
+      (global as any).mcpAuth = (global as any).mcpAuth || {};
+      (global as any).mcpAuth[apiKey] = verification;
+
+      console.log('[SSE] Valid API key for user:', verification.userId, 'plan:', verification.plan, 'mcpEnabled:', verification.mcpEnabled);
       console.log('New SSE connection established');
       const transport = new SSEServerTransport('/messages', res);
-      const server = createFceMcpServer(apiKey);
+      const server = createFceMcpServer(apiKey, verification);
       await server.connect(transport);
       
       transports.set(transport.sessionId, transport);
