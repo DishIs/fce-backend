@@ -105,7 +105,7 @@ Add the following configuration to your `kilo.json` or `~/.config/kilo/kilo.json
 
 Because this package is designed as a **Local Stdio** server for desktop agents, you have two options for Claude:
 1. **Recommended:** Download and use the [Claude Desktop App](https://claude.ai/download). It natively supports local `npx` commands and allows you to follow the "Claude Desktop" setup above seamlessly.
-2. **Custom Hosting:** If you *must* use Claude Web, you will need to wrap this SDK in an HTTP/SSE transport (e.g., using Express) and host it online on a platform like Heroku, Vercel, or your own VPS. Once hosted, you can provide your secure public URL into the "Remote MCP server URL" field in Claude Web.
+2. **Custom Hosting:** If you *must* use Claude Web, you will need to host this SDK via HTTP/SSE. See our complete [Production SSE Hosting Guide](SSE-HOSTING.md) to deploy it securely using Docker and Nginx. Once hosted, you can provide your secure public URL (`https://mcp.freecustom.email/sse`) into the "Remote MCP server URL" field in Claude Web, and configure your API Key via OAuth/Bearer token headers.
 
 ## Best Practices & Example Prompts
 

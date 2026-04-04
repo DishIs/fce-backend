@@ -1,6 +1,6 @@
 {
   "name": "fce-mcp-server",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "Official Model Context Protocol (MCP) server for FreeCustom.Email - AI-native email workflows",
   "main": "build/index.js",
   "type": "module",
@@ -28,9 +28,13 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.0",
     "axios": "^1.7.9",
+    "cors": "^2.8.6",
+    "express": "^5.2.1",
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.13.5",
     "typescript": "^5.7.3"
   }

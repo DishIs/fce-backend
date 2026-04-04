@@ -29,7 +29,22 @@ services:
       - ./smtp-fast/src/config:/haraka-config
     entrypoint: /bin/sh -c
     command: >
-      "certbot certonly --webroot --webroot-path=/var/www/certbot --email dishantsinghdev@icloud.com --agree-tos --no-eff-email --key-type ecdsa --elliptic-curve secp384r1 -d api2.freecustom.email -d mx.freecustom.email && echo 'Copying initial certs to Haraka config...' && cp /etc/letsencrypt/live/api2.freecustom.email/privkey.pem /haraka-config/tls_key.pem && cp /etc/letsencrypt/live/api2.freecustom.email/fullchain.pem /haraka-config/tls_cert.pem"
+      "certbot certonly --webroot --webroot-path=/var/www/certbot --email dishantsinghdev@icloud.com --agree-tos --no-eff-email --key-type ecdsa --elliptic-curve secp384r1 -d api2.freecustom.email -d mx.freecustom.email -d mcp.freecustom.email && echo 'Copying initial certs to Haraka config...' && cp /etc/letsencrypt/live/api2.freecustom.email/privkey.pem /haraka-config/tls_key.pem && cp /etc/letsencrypt/live/api2.freecustom.email/fullchain.pem /haraka-config/tls_cert.pem"
+
+  mcp-server:
+    build:
+      context: ./mcp-server
+      dockerfile: Dockerfile
+    container_name: fce-mcp-server
+    restart: unless-stopped
+    environment:
+      - TRANSPORT=sse
+      - PORT=3000
+      - FCE_API_URL=${FCE_API_URL:-https://api2.freecustom.email/v1/mcp}
+    expose:
+      - "3000"
+    depends_on:
+      - redis
 
   certbot-renew:
     image: certbot/certbot
