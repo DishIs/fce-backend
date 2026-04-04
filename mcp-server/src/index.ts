@@ -58,61 +58,67 @@ async function verifyApiKey(apiKey: string): Promise<{ valid: boolean; userId?: 
   }
 }
 
-// Wrap server creation in a function for multi-tenancy in SSE
-function createFceMcpServer(apiKey: string, verification?: { valid: boolean; userId?: string; plan?: string; mcpEnabled?: boolean }) {
-  const server = new McpServer({
-    name: "fce-mcp",
-    version: "1.0.8"
-  });
+  // Wrap server creation in a function for multi-tenancy in SSE
+  function createFceMcpServer(apiKey: string, verification?: { valid: boolean; userId?: string; plan?: string; mcpEnabled?: boolean }) {
+    const server = new McpServer({
+      name: "fce-mcp",
+      version: "1.0.9"
+    });
 
-  const apiClient = axios.create({
-    baseURL: BASE_URL,
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    timeout: 70000 
-  });
+    console.log('[MCP] Server created, registering tools...');
 
-  server.tool("get_latest_email", {
-    inbox: z.string().describe("The full email address of the inbox (e.g. hello@ditube.info)"),
-  }, async ({ inbox }) => {
-    try {
-      const response = await apiClient.get(`/inboxes/${inbox}/messages/latest`);
-      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
-    } catch (error) {
-      return { content: [{ type: "text", text: formatError(error) }], isError: true };
-    }
-  });
+    const apiClient = axios.create({
+      baseURL: BASE_URL,
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 70000 
+    });
 
-  server.tool("extract_otp", {
-    inbox: z.string().describe("The full email address of the inbox to extract OTP from"),
-  }, async ({ inbox }) => {
-    try {
-      const response = await apiClient.get(`/inboxes/${inbox}/otp`);
-      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
-    } catch (error) {
-      return { content: [{ type: "text", text: formatError(error) }], isError: true };
-    }
-  });
+    server.tool("get_latest_email", {
+      inbox: z.string().describe("The full email address of the inbox (e.g. hello@ditube.info)"),
+    }, async ({ inbox }) => {
+      console.log('[MCP] get_latest_email called for:', inbox);
+      try {
+        const response = await apiClient.get(`/inboxes/${inbox}/messages/latest`);
+        return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+      } catch (error) {
+        return { content: [{ type: "text", text: formatError(error) }], isError: true };
+      }
+    });
 
-  server.tool("create_and_wait_for_otp", {
-    domain: z.string().optional().describe("Optional domain to use. Defaults to ditube.info"),
-    timeout: z.number().min(10).max(60).optional().describe("Max wait time in seconds (10-60). Default 45."),
-  }, async ({ domain, timeout }) => {
-    try {
-      const response = await apiClient.post(`/create-and-wait-otp`, {
-        domain: domain || 'ditube.info',
-        timeout: timeout || 45
-      });
-      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
-    } catch (error) {
-      return { content: [{ type: "text", text: formatError(error) }], isError: true };
-    }
-  });
+    server.tool("extract_otp", {
+      inbox: z.string().describe("The full email address of the inbox to extract OTP from"),
+    }, async ({ inbox }) => {
+      console.log('[MCP] extract_otp called for:', inbox);
+      try {
+        const response = await apiClient.get(`/inboxes/${inbox}/otp`);
+        return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+      } catch (error) {
+        return { content: [{ type: "text", text: formatError(error) }], isError: true };
+      }
+    });
 
-  return server;
-}
+    server.tool("create_and_wait_for_otp", {
+      domain: z.string().optional().describe("Optional domain to use. Defaults to ditube.info"),
+      timeout: z.number().min(10).max(60).optional().describe("Max wait time in seconds (10-60). Default 45."),
+    }, async ({ domain, timeout }) => {
+      console.log('[MCP] create_and_wait_for_otp called, domain:', domain, 'timeout:', timeout);
+      try {
+        const response = await apiClient.post(`/create-and-wait-otp`, {
+          domain: domain || 'ditube.info',
+          timeout: timeout || 45
+        });
+        return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+      } catch (error) {
+        return { content: [{ type: "text", text: formatError(error) }], isError: true };
+      }
+    });
+
+    console.log('[MCP] Tools registered, returning server');
+    return server;
+  }
 
 // In-memory token storage (for demo - use Redis in production)
 const tokenStore = new Map<string, { apiKey: string; clientId: string; createdAt: Date }>();
