@@ -101,6 +101,104 @@ function createFceMcpServer(apiKey: string) {
     }
   });
 
+  // Additional tools for more complete MCP functionality
+  server.tool("list_inboxes", {
+  }, async () => {
+    try {
+      const response = await apiClient.get(`/inboxes`);
+      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: formatError(error) }], isError: true };
+    }
+  });
+
+  server.tool("get_messages", {
+    inbox: z.string().describe("The full email address of the inbox"),
+    limit: z.number().min(1).max(100).optional().describe("Number of messages to fetch (default 10)"),
+    unread_only: z.boolean().optional().describe("Only fetch unread messages"),
+  }, async ({ inbox, limit, unread_only }) => {
+    try {
+      const params = new URLSearchParams();
+      if (limit) params.append('limit', limit.toString());
+      if (unread_only) params.append('unread_only', 'true');
+      const response = await apiClient.get(`/inboxes/${inbox}/messages?${params}`);
+      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: formatError(error) }], isError: true };
+    }
+  });
+
+  server.tool("watch_email", {
+    inbox: z.string().describe("The full email address of the inbox to watch"),
+    timeout: z.number().min(10).max(60).optional().describe("Max wait time in seconds (default 30)"),
+    since: z.string().optional().describe("Message ID to wait for newer messages after"),
+  }, async ({ inbox, timeout, since }) => {
+    try {
+      const params = new URLSearchParams();
+      if (timeout) params.append('timeout', timeout.toString());
+      if (since) params.append('since', since);
+      const response = await apiClient.get(`/inboxes/${inbox}/wait?${params}`);
+      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: formatError(error) }], isError: true };
+    }
+  });
+
+  server.tool("delete_email", {
+    inbox: z.string().describe("The full email address of the inbox"),
+    message_id: z.string().describe("The message ID to delete"),
+  }, async ({ inbox, message_id }) => {
+    try {
+      const response = await apiClient.delete(`/inboxes/${inbox}/messages/${message_id}`);
+      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: formatError(error) }], isError: true };
+    }
+  });
+
+  server.tool("list_custom_domains", {
+  }, async () => {
+    try {
+      const response = await apiClient.get(`/custom-domains`);
+      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: formatError(error) }], isError: true };
+    }
+  });
+
+  server.tool("add_custom_domain", {
+    domain: z.string().describe("The custom domain to add (e.g. mail.yourdomain.com)"),
+  }, async ({ domain }) => {
+    try {
+      const response = await apiClient.post(`/custom-domains`, { domain });
+      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: formatError(error) }], isError: true };
+    }
+  });
+
+  server.tool("verify_custom_domain", {
+    domain: z.string().describe("The custom domain to verify"),
+  }, async ({ domain }) => {
+    try {
+      const response = await apiClient.post(`/custom-domains/${domain}/verify`);
+      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: formatError(error) }], isError: true };
+    }
+  });
+
+  server.tool("delete_custom_domain", {
+    domain: z.string().describe("The custom domain to delete"),
+  }, async ({ domain }) => {
+    try {
+      const response = await apiClient.delete(`/custom-domains/${domain}`);
+      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+    } catch (error) {
+      return { content: [{ type: "text", text: formatError(error) }], isError: true };
+    }
+  });
+
   return server;
 }
 

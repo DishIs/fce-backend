@@ -49,22 +49,75 @@ This justifies the immense time-savings for AI developers:
 | `get_latest_email` | Fetch the latest message from an inbox | **2x** normal API request |
 | `extract_otp` | Parse and extract OTP from an inbox | **3x** normal API request |
 | `create_and_wait_for_otp` | Create inbox & wait for OTP in one call | **5x** normal API request |
+| `watch_email` | Long-polling wait for new emails | **10x** normal API request |
+| All other tools | Standard API operations | **1x** normal API request |
 
 ## Tools Provided
 
-### 1. `get_latest_email`
+We provide three categories of MCP tools: **Email Operations**, **Custom Domains**, and **Inbox Management**.
+
+### Email Operations
+
+#### 1. `get_latest_email`
 Retrieves the most recent email for a given inbox address. 
-*   **Args**: `inbox` (string) - The full email address of the inbox (e.g. `hello@ditube.info`)
+* **Args**: `inbox` (string) - The full email address of the inbox (e.g. `hello@ditube.info`)
 
-### 2. `extract_otp`
+#### 2. `extract_otp`
 Directly retrieves the latest 4-6 digit code or verification link.
-*   **Args**: `inbox` (string) - The full email address of the inbox to extract OTP from
+* **Args**: `inbox` (string) - The full email address of the inbox to extract OTP from
 
-### 3. `create_and_wait_for_otp` (🔥 GOLD FEATURE)
+#### 3. `create_and_wait_for_otp` (🔥 GOLD FEATURE)
 Generates a random inbox on our premium domains and holds the connection open until an OTP arrives. This allows an AI agent to execute a complete signup flow in a single tool call!
-*   **Args**: 
-    *   `domain` (optional string) - Domain to use, defaults to `ditube.info`
-    *   `timeout` (optional number) - Max wait time in seconds (10-60), defaults to 45
+* **Args**: 
+  * `domain` (optional string) - Domain to use, defaults to `ditube.info`
+  * `timeout` (optional number) - Max wait time in seconds (10-60), defaults to 45
+
+#### 4. `watch_email`
+Long-polling wait for new emails on an existing inbox. Use this when you've already created an inbox and want to wait for the next incoming email.
+* **Args**: 
+  * `inbox` (string) - The full email address of the inbox to watch
+  * `timeout` (optional number) - Max wait time in seconds (10-60), defaults to 30
+  * `since` (optional string) - Message ID to wait for newer messages after
+
+#### 5. `get_messages`
+Fetches multiple messages from an inbox.
+* **Args**: 
+  * `inbox` (string) - The full email address of the inbox
+  * `limit` (optional number) - Number of messages to fetch (1-100, default 10)
+  * `unread_only` (optional boolean) - Only fetch unread messages
+
+#### 6. `delete_email`
+Deletes a specific email from an inbox.
+* **Args**: 
+  * `inbox` (string) - The full email address of the inbox
+  * `message_id` (string) - The message ID to delete
+
+### Inbox Management
+
+#### 7. `list_inboxes`
+Lists all inboxes owned by the API key's account.
+* **Args**: (none)
+
+### Custom Domain Management
+
+#### 8. `list_custom_domains`
+Lists all custom domains associated with the account.
+* **Args**: (none)
+
+#### 9. `add_custom_domain`
+Adds a new custom domain to the account.
+* **Args**: 
+  * `domain` (string) - The custom domain to add (e.g. `mail.yourdomain.com`)
+
+#### 10. `verify_custom_domain`
+Initiates DNS verification for a custom domain.
+* **Args**: 
+  * `domain` (string) - The custom domain to verify
+
+#### 11. `delete_custom_domain`
+Deletes a custom domain from the account.
+* **Args**: 
+  * `domain` (string) - The custom domain to delete
 
 ---
 
