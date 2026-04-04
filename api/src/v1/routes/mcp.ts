@@ -275,4 +275,72 @@ router.post('/create-and-wait-otp', async (req: Request, res: Response): Promise
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. GET /v1/mcp/watch-email — long-polling wait for new emails (10x Cost)
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/watch-email', async (req: Request, res: Response): Promise<any> => {
+  const inbox = (req.query.inbox as string)?.toLowerCase();
+  const apiUser = req.apiUser!;
+
+  if (!inbox) {
+    return res.status(400).json({
+      success: false,
+      error: 'missing_field',
+      message: '`inbox` query parameter is required.',
+    });
+  }
+
+  if (!(await assertOwned(apiUser.userId, inbox))) {
+    return res.status(403).json({
+      success: false,
+      error: 'inbox_not_owned',
+      message: 'Register this inbox first via POST /v1/inboxes or use create_and_wait_for_otp.',
+    });
+  }
+
+  let timeout = parseInt(req.query.timeout as string, 10);
+  if (isNaN(timeout)) timeout = 30;
+  if (timeout < 10) timeout = 10;
+  if (timeout > 60) timeout = 60;
+
+  const since = req.query.since as string | undefined;
+  const internalPlan = apiPlanToInternalPlan(apiUser.plan);
+
+  await applyMcpCost(apiUser.userId, 10);
+
+  if (since) {
+    const messages = await getInbox(inbox, internalPlan) as any[];
+    const sinceIndex = messages.findIndex(m => m.id === since);
+    
+    if (sinceIndex > 0) {
+      return res.json({ success: true, message: 'New message received', data: messages[0] });
+    }
+  }
+
+  const eventName = `mailbox:${inbox}`;
+  let timer: NodeJS.Timeout;
+
+  const onNewEmail = (event: any) => {
+    clearTimeout(timer);
+    globalEvents.off(eventName, onNewEmail);
+    if (!res.headersSent) {
+      res.json({ success: true, message: 'New message received', data: event });
+    }
+  };
+
+  timer = setTimeout(() => {
+    globalEvents.off(eventName, onNewEmail);
+    if (!res.headersSent) {
+      res.json({ success: false, inbox, message: 'Timeout reached, no new email received' });
+    }
+  }, timeout * 1000);
+
+  globalEvents.on(eventName, onNewEmail);
+
+  req.on('close', () => {
+    globalEvents.off(eventName, onNewEmail);
+    clearTimeout(timer);
+  });
+});
+
 export default router;
