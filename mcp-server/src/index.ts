@@ -284,7 +284,6 @@ function createFceMcpServer(apiKey: string) {
 }
 
 const tokenStore = new Map<string, { apiKey: string; clientId: string; createdAt: Date }>();
-const sessions = new Map<string, { transport: StreamableHTTPServerTransport }>();
 
 async function main() {
   const isSSE = process.env.TRANSPORT === 'sse';
@@ -378,39 +377,31 @@ async function main() {
 
       console.log('[MCP] Verified user:', verification.userId, 'plan:', verification.plan);
 
-      const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      
-      let transport: StreamableHTTPServerTransport;
-
-      if (sessionId && sessions.has(sessionId)) {
-        transport = sessions.get(sessionId)!.transport;
-      } else {
-        transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: undefined,
-          onsessioninitialized: (newSessionId: string) => {
-            console.log('[MCP] Session initialized:', newSessionId);
-            sessions.set(newSessionId, { transport });
-          }
-        });
-        
-        const server = createFceMcpServer(apiKey);
-        await server.connect(transport);
-      }
+      let transport: StreamableHTTPServerTransport | undefined;
+      let server: Awaited<ReturnType<typeof createFceMcpServer>> | undefined;
 
       try {
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+        });
+        
+        server = createFceMcpServer(apiKey);
+        await server.connect(transport);
+        
         await transport.handleRequest(req, res, req.body);
       } catch (err) {
         console.error('[MCP] Handle error:', err);
         if (!res.headersSent) {
           res.status(500).json({ error: 'Internal error' });
         }
-      }
-
-      req.on('close', () => {
-        if (transport.sessionId) {
-          sessions.delete(transport.sessionId);
+      } finally {
+        if (transport) {
+          await transport.close();
         }
-      });
+        if (server) {
+          server.close();
+        }
+      }
     });
 
     // Also support GET for initial connection
@@ -435,23 +426,29 @@ async function main() {
 
       console.log('[MCP] Verified user:', verification.userId);
 
-      const server = createFceMcpServer(apiKey);
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined,
-      });
-
-      await server.connect(transport);
-      
-      if (transport.sessionId) {
-        sessions.set(transport.sessionId, { transport });
-      }
+      let transport: StreamableHTTPServerTransport | undefined;
+      let server: Awaited<ReturnType<typeof createFceMcpServer>> | undefined;
 
       try {
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: undefined,
+        });
+        
+        server = createFceMcpServer(apiKey);
+        await server.connect(transport);
+        
         await transport.handleRequest(req, res);
       } catch (err) {
         console.error('[MCP] Handle error:', err);
         if (!res.headersSent) {
           res.status(500).json({ error: 'Internal error' });
+        }
+      } finally {
+        if (transport) {
+          await transport.close();
+        }
+        if (server) {
+          server.close();
         }
       }
     });
