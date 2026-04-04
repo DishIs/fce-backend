@@ -7,6 +7,17 @@ import { logCriticalError } from '../utils/logger';
 import { notifyAnomaly } from '../utils/alerts';
 import { sendEmail } from '../email/resend';
 
+async function hasApiCredits(userId: string): Promise<boolean> {
+  if (!userId) return false;
+  const user = await db.collection('users').findOne(
+    { wyiUserId: userId },
+    { projection: { apiCredits: 1, proBonusCredits: 1 } }
+  );
+  if (!user) return false;
+  const credits = ((user as any).apiCredits ?? 0) + ((user as any).proBonusCredits ?? 0);
+  return credits > 0;
+}
+
 export interface UserContext {
   userId: string | null;
   fingerprint: string;
@@ -418,8 +429,11 @@ export const progressiveFrictionEngine = async (
       const alreadyWarnedKey = `abuse:warned:${fingerprint}`;
       const alreadyWarned = await redis.get(alreadyWarnedKey);
       if (!alreadyWarned) {
-        await warnAbusiveFingerprint(fingerprint, userId, usage);
-        await redis.set(alreadyWarnedKey, '1', { EX: 30 * 24 * 60 * 60 });
+        const hasCredits = await hasApiCredits(userId);
+        if (!hasCredits) {
+          await warnAbusiveFingerprint(fingerprint, userId, usage);
+          await redis.set(alreadyWarnedKey, '1', { EX: 30 * 24 * 60 * 60 });
+        }
       }
     }
 
