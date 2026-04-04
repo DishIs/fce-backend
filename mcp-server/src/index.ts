@@ -381,13 +381,12 @@ async function main() {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       
       let transport: StreamableHTTPServerTransport;
-      const isNewSession = !sessionId || !sessions.has(sessionId);
 
       if (sessionId && sessions.has(sessionId)) {
         transport = sessions.get(sessionId)!.transport;
       } else {
         transport = new StreamableHTTPServerTransport({
-          sessionIdGenerator: () => crypto.randomUUID(),
+          sessionIdGenerator: undefined,
           onsessioninitialized: (newSessionId: string) => {
             console.log('[MCP] Session initialized:', newSessionId);
             sessions.set(newSessionId, { transport });
@@ -408,7 +407,7 @@ async function main() {
       }
 
       req.on('close', () => {
-        if (isNewSession && transport.sessionId) {
+        if (transport.sessionId) {
           sessions.delete(transport.sessionId);
         }
       });
@@ -438,7 +437,7 @@ async function main() {
 
       const server = createFceMcpServer(apiKey);
       const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
+        sessionIdGenerator: undefined,
       });
 
       await server.connect(transport);
