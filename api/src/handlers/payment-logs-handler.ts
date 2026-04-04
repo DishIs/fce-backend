@@ -128,8 +128,13 @@ export async function getPaymentLogsHandler(req: Request, res: Response): Promis
       return res.status(404).json({ success: false, message: 'User not found.' });
     }
 
+    const allIds = [user.wyiUserId];
+    if (user.linkedProviderIds && Array.isArray(user.linkedProviderIds)) {
+      allIds.push(...user.linkedProviderIds);
+    }
+
     // Build query — filter by productType hint stored in details._type if present
-    const query: Record<string, any> = { userId: user.wyiUserId };
+    const query: Record<string, any> = { userId: { $in: allIds } };
     if (type === 'credits') {
       query['details._type'] = 'api_credits_purchase';
     } else if (type === 'api') {
