@@ -284,7 +284,7 @@ function createFceMcpServer(apiKey: string) {
 }
 
 const tokenStore = new Map<string, { apiKey: string; clientId: string; createdAt: Date }>();
-const sessions = new Map<string, { transport: StreamableHTTPServerTransport; server: McpServer }>();
+const sessions = new Map<string, { transport: StreamableHTTPServerTransport }>();
 
 async function main() {
   const isSSE = process.env.TRANSPORT === 'sse';
@@ -381,25 +381,21 @@ async function main() {
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       
       let transport: StreamableHTTPServerTransport;
-      let server = sessions.get(sessionId || '')?.server;
+      const isNewSession = !sessionId || !sessions.has(sessionId);
 
       if (sessionId && sessions.has(sessionId)) {
         transport = sessions.get(sessionId)!.transport;
       } else {
-        server = createFceMcpServer(apiKey);
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => crypto.randomUUID(),
-          onsessioninitialized: (sessionId: string) => {
-            console.log('[MCP] Session initialized:', sessionId);
-            sessions.set(sessionId, { transport, server: server! });
+          onsessioninitialized: (newSessionId: string) => {
+            console.log('[MCP] Session initialized:', newSessionId);
+            sessions.set(newSessionId, { transport });
           }
         });
         
+        const server = createFceMcpServer(apiKey);
         await server.connect(transport);
-        
-        if (transport.sessionId) {
-          sessions.set(transport.sessionId, { transport, server });
-        }
       }
 
       try {
@@ -412,7 +408,7 @@ async function main() {
       }
 
       req.on('close', () => {
-        if (transport.sessionId) {
+        if (isNewSession && transport.sessionId) {
           sessions.delete(transport.sessionId);
         }
       });
@@ -448,7 +444,7 @@ async function main() {
       await server.connect(transport);
       
       if (transport.sessionId) {
-        sessions.set(transport.sessionId, { transport, server });
+        sessions.set(transport.sessionId, { transport });
       }
 
       try {
