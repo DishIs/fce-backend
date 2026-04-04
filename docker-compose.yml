@@ -38,14 +38,16 @@ services:
     container_name: fce-mcp-server
     restart: unless-stopped
     environment:
-      - TRANSPORT=sse
-      - PORT=3001
-      - FCE_API_URL=${FCE_API_URL:-https://api2.freecustom.email/v1/mcp}
-      - MCP_BASE_URL=${MCP_BASE_URL:-https://mcp.freecustom.email}
+      - TRANSPORT=streamable
+      - PORT=3000
+      - FCE_API_URL=https://api2.freecustom.email/v1
+      - MCP_BASE_URL=https://api2.freecustom.email/v1/mcp
+      - MCP_ISSUER=https://mcp.freecustom.email
+      - MCP_BASE_URL_PUBLIC=https://mcp.freecustom.email
     expose:
-      - "3001"
+      - "3000"
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/"]
       interval: 10s
       timeout: 5s
       retries: 5

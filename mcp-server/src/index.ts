@@ -10,7 +10,9 @@ import cors from 'cors';
 import crypto from 'crypto';
 
 const BASE_URL = process.env.FCE_API_URL || 'https://api2.freecustom.email/v1';
-const MCP_BASE_URL = process.env.FCE_API_URL || 'https://api2.freecustom.email/v1/mcp';
+const MCP_BASE_URL = process.env.MCP_BASE_URL || 'https://api2.freecustom.email/v1/mcp';
+const MCP_ISSUER = process.env.MCP_ISSUER || 'https://mcp.freecustom.email';
+const MCP_PUBLIC_URL = process.env.MCP_BASE_URL_PUBLIC || 'https://mcp.freecustom.email';
 
 // Helper for error formatting
 function formatError(error: unknown): string {
@@ -43,8 +45,7 @@ function formatError(error: unknown): string {
 // Verify API key with backend
 async function verifyApiKey(apiKey: string): Promise<{ valid: boolean; userId?: string; plan?: string; mcpEnabled?: boolean }> {
   try {
-    const baseUrl = BASE_URL.replace('/v1/mcp', '');
-    const response = await axios.get(`${baseUrl}/v1/mcp/status`, {
+    const response = await axios.get(`${BASE_URL}/mcp/status`, {
       headers: { 'Authorization': `Bearer ${apiKey}` },
       timeout: 10000
     });
@@ -136,6 +137,19 @@ function createFceMcpServer(apiKey: string) {
     }
   });
 
+  server.tool("create_inbox", {
+    inbox: z.string().describe("The full email address to register (e.g. mybox@ditube.info)"),
+  }, async ({ inbox }) => {
+    try {
+      console.log('[MCP] create_inbox called:', inbox);
+      const response = await apiClient.post(`/inboxes`, { inbox });
+      return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+    } catch (error: any) {
+      console.log('[MCP] create_inbox error:', error?.response?.data || error.message);
+      return { content: [{ type: "text", text: formatError(error) }], isError: true };
+    }
+  });
+
   server.tool("get_messages", {
     inbox: z.string().describe("The full email address of the inbox"),
     limit: z.number().min(1).max(100).optional().describe("Number of messages to fetch (default 10)"),
@@ -163,12 +177,14 @@ function createFceMcpServer(apiKey: string) {
       console.log('[MCP] watch_email called for:', inbox, 'timeout:', timeout);
       // Use the MCP-specific watch-email endpoint (not the regular inbox wait)
       const params = new URLSearchParams();
+      params.append('inbox', inbox);
       if (timeout) params.append('timeout', timeout.toString());
       if (since) params.append('since', since);
-      const response = await mcpClient.get(`/watch-email?inbox=${inbox}&${params}`);
+      console.log('[MCP] watch_email URL:', `${MCP_BASE_URL}/watch-email?${params.toString()}`);
+      const response = await mcpClient.get(`/watch-email?${params.toString()}`);
       return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
-    } catch (error) {
-      console.log('[MCP] watch_email error:', error);
+    } catch (error: any) {
+      console.log('[MCP] watch_email error:', error?.response?.data || error.message);
       return { content: [{ type: "text", text: formatError(error) }], isError: true };
     }
   });
@@ -285,9 +301,9 @@ async function main() {
 
     app.get('/.well-known/oauth-authorization-server', (req, res) => {
       res.json({
-        issuer: process.env.MCP_ISSUER || 'https://mcp.freecustom.email',
-        authorization_endpoint: `${process.env.MCP_BASE_URL || 'https://mcp.freecustom.email'}/authorize`,
-        token_endpoint: `${process.env.MCP_BASE_URL || 'https://mcp.freecustom.email'}/token`,
+        issuer: MCP_ISSUER,
+        authorization_endpoint: `${MCP_PUBLIC_URL}/authorize`,
+        token_endpoint: `${MCP_PUBLIC_URL}/token`,
         scopes_supported: ['read', 'write'],
         response_types_supported: ['code'],
         grant_types_supported: ['authorization_code', 'client_credentials'],
@@ -342,21 +358,25 @@ async function main() {
 
     // Streamable HTTP endpoint (works for both SSE and regular HTTP)
     app.post('/mcp', async (req, res) => {
+      console.log('[MCP] POST /mcp called, body:', JSON.stringify(req.body).substring(0, 500));
+      
       const authHeader = req.headers.authorization || req.headers.Authorization as string;
       let apiKey = authHeader ? authHeader.replace(/Bearer /i, '') : process.env.FCE_API_KEY;
 
       if (!apiKey) {
+        console.log('[MCP] No API key provided');
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
 
       const verification = await verifyApiKey(apiKey);
       if (!verification.valid) {
+        console.log('[MCP] Invalid API key:', apiKey?.substring(0, 10));
         res.status(401).json({ error: 'Invalid API key' });
         return;
       }
 
-      console.log('[MCP] Request from user:', verification.userId);
+      console.log('[MCP] Verified user:', verification.userId, 'plan:', verification.plan);
 
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
       
@@ -400,21 +420,25 @@ async function main() {
 
     // Also support GET for initial connection
     app.get('/mcp', async (req, res) => {
+      console.log('[MCP] GET /mcp called');
+      
       const authHeader = req.headers.authorization || req.headers.Authorization as string;
       let apiKey = authHeader ? authHeader.replace(/Bearer /i, '') : process.env.FCE_API_KEY;
 
       if (!apiKey) {
+        console.log('[MCP] No API key provided');
         res.status(401).json({ error: 'Unauthorized' });
         return;
       }
 
       const verification = await verifyApiKey(apiKey);
       if (!verification.valid) {
+        console.log('[MCP] Invalid API key');
         res.status(401).json({ error: 'Invalid API key' });
         return;
       }
 
-      console.log('[MCP] GET request from user:', verification.userId);
+      console.log('[MCP] Verified user:', verification.userId);
 
       const server = createFceMcpServer(apiKey);
       const transport = new StreamableHTTPServerTransport({

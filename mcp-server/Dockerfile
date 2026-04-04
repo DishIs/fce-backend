@@ -8,10 +8,13 @@ RUN npm install
 COPY . .
 RUN npm run build
 
-# Default to SSE mode for Docker
-ENV TRANSPORT=sse
-ENV PORT=3001
+ENV TRANSPORT=streamable
+ENV PORT=3000
+ENV FCE_API_URL=https://api2.freecustom.email/v1
+ENV MCP_BASE_URL=https://api2.freecustom.email/v1/mcp
+ENV MCP_ISSUER=https://mcp.freecustom.email
+ENV MCP_BASE_URL_PUBLIC=https://mcp.freecustom.email
 
-EXPOSE 3001
+EXPOSE 3000
 
 CMD ["npm", "start"]
