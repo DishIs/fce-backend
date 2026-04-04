@@ -3,7 +3,7 @@ import { client as redis } from '../config/redis';
 
 const ALERT_EMAIL = 'dishantsinghdev@icloud.com';
 
-type AnomalyType = 'nonce_replay' | 'hmac_mismatch' | 'abuse_429';
+type AnomalyType = 'nonce_replay' | 'hmac_mismatch' | 'abuse_429' | 'user_warned' | 'user_banned';
 
 /**
  * Tracks and alerts on system anomalies.

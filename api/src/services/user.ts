@@ -281,12 +281,15 @@ export async function upsertUserHandler(req: Request, res: Response) {
         });
       }
 
-      // Ban check
-      if ((exactMatch as any).banStatus === 'banned') {
+      // Ban check - block both banned and warned users
+      const banStatus = (exactMatch as any).banStatus;
+      if (banStatus === 'banned' || banStatus === 'warned') {
         return res.status(403).json({
           success:      false,
-          message:      'Your account has been permanently banned due to a policy violation.',
-          banStatus:    'banned',
+          message:      banStatus === 'banned' 
+            ? 'Your account has been permanently banned due to a policy violation.'
+            : 'Your account has been flagged for review due to high API usage.',
+          banStatus:    banStatus,
           banReason:    (exactMatch as any).banReason || 'Policy violation.',
           contactEmail: 'support@freecustom.email',
         });
@@ -320,12 +323,15 @@ export async function upsertUserHandler(req: Request, res: Response) {
         });
       }
 
-      // Ban check
-      if ((emailMatch as any).banStatus === 'banned') {
+      // Ban check - block both banned and warned users
+      const banStatus = (emailMatch as any).banStatus;
+      if (banStatus === 'banned' || banStatus === 'warned') {
         return res.status(403).json({
           success:      false,
-          message:      'Your account has been permanently banned due to a policy violation.',
-          banStatus:    'banned',
+          message:      banStatus === 'banned' 
+            ? 'Your account has been permanently banned due to a policy violation.'
+            : 'Your account has been flagged for review due to high API usage.',
+          banStatus:    banStatus,
           banReason:    (emailMatch as any).banReason || 'Policy violation.',
           contactEmail: 'support@freecustom.email',
         });
