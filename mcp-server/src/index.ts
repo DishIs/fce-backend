@@ -161,10 +161,11 @@ function createFceMcpServer(apiKey: string) {
   }, async ({ inbox, timeout, since }) => {
     try {
       console.log('[MCP] watch_email called for:', inbox, 'timeout:', timeout);
+      // Use the MCP-specific watch-email endpoint (not the regular inbox wait)
       const params = new URLSearchParams();
       if (timeout) params.append('timeout', timeout.toString());
       if (since) params.append('since', since);
-      const response = await apiClient.get(`/inboxes/${inbox}/wait?${params}`);
+      const response = await mcpClient.get(`/watch-email?inbox=${inbox}&${params}`);
       return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
     } catch (error) {
       console.log('[MCP] watch_email error:', error);
