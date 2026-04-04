@@ -6,6 +6,7 @@ import { z } from "zod";
 import axios from 'axios';
 import express from 'express';
 import cors from 'cors';
+import crypto from 'crypto';
 
 const BASE_URL = process.env.FCE_API_URL || 'https://api2.freecustom.email/v1/mcp';
 
@@ -80,20 +81,104 @@ function createFceMcpServer(apiKey: string) {
   return server;
 }
 
+// In-memory token storage (for demo - use Redis in production)
+const tokenStore = new Map<string, { apiKey: string; clientId: string; createdAt: Date }>();
+
 async function main() {
   const isSSE = process.env.TRANSPORT === 'sse';
 
   if (isSSE) {
     const app = express();
     app.use(cors());
+    app.use(express.json());
     
     // Store active SSE transports
     const transports = new Map<string, SSEServerTransport>();
 
+    // OAuth configuration
+    const CLIENT_ID = process.env.MCP_CLIENT_ID || 'fce_mcp_server';
+    const CLIENT_SECRET = process.env.MCP_CLIENT_SECRET || crypto.randomBytes(32).toString('hex');
+    const REDIRECT_URI = process.env.MCP_REDIRECT_URI || '';
+
+    // OAuth metadata endpoint (required by MCP clients)
+    app.get('/.well-known/oauth-authorization-server', (req, res) => {
+      res.json({
+        issuer: process.env.MCP_ISSUER || 'https://mcp.freecustom.email',
+        authorization_endpoint: `${process.env.MCP_BASE_URL || 'https://mcp.freecustom.email'}/authorize`,
+        token_endpoint: `${process.env.MCP_BASE_URL || 'https://mcp.freecustom.email'}/token`,
+        scopes_supported: ['read', 'write'],
+        response_types_supported: ['code'],
+        grant_types_supported: ['authorization_code', 'client_credentials'],
+        code_challenge_methods_supported: ['S256']
+      });
+    });
+
+    // OAuth authorize endpoint
+    app.get('/authorize', async (req, res) => {
+      const clientId = req.query.client_id as string;
+      const redirectUri = req.query.redirect_uri as string;
+      const state = req.query.state as string;
+
+      if (!clientId || !redirectUri) {
+        return res.status(400).json({ error: 'invalid_request', error_description: 'Missing required parameters' });
+      }
+
+      // Store client_id as the API key (simplified OAuth - the client's API key becomes the client_id)
+      const authCode = crypto.randomBytes(32).toString('hex');
+      
+      tokenStore.set(authCode, {
+        apiKey: clientId, // Use client_id as the API key
+        clientId: clientId,
+        createdAt: new Date()
+      });
+
+      // Build the redirect URL with the auth code
+      const redirectUrl = new URL(redirectUri);
+      redirectUrl.searchParams.set('code', authCode);
+      if (state) redirectUrl.searchParams.set('state', state);
+
+      res.redirect(redirectUrl.toString());
+    });
+
+    // OAuth token endpoint
+    app.post('/token', async (req, res) => {
+      const grantType = req.body.grant_type;
+      const code = req.body.code;
+      const clientId = req.body.client_id;
+      const clientSecret = req.body.client_secret;
+
+      if (grantType === 'authorization_code') {
+        const stored = tokenStore.get(code);
+        if (!stored) {
+          return res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired code' });
+        }
+
+        // The access token IS the API key (simplified flow)
+        const accessToken = stored.apiKey;
+        
+        // Clean up the auth code
+        tokenStore.delete(code);
+
+        res.json({
+          access_token: accessToken,
+          token_type: 'Bearer',
+          expires_in: 31536000, // 1 year for API key based auth
+        });
+      } else {
+        res.status(400).json({ error: 'unsupported_grant_type', error_description: 'Only authorization_code grant supported' });
+      }
+    });
+
+    // SSE endpoint
     app.get('/sse', async (req, res) => {
-      // Allow API key from header (multi-tenant) or env fallback
+      // Support both Bearer token and API key from header
       const authHeader = req.headers.authorization || req.headers.Authorization as string;
-      const apiKey = authHeader ? authHeader.replace(/Bearer /i, '') : process.env.FCE_API_KEY;
+      let apiKey = authHeader ? authHeader.replace(/Bearer /i, '') : process.env.FCE_API_KEY;
+
+      // If no Bearer token, check for API key in query (for browser EventSource)
+      if (!apiKey) {
+        apiKey = req.query.access_token as string || process.env.FCE_API_KEY;
+      }
 
       if (!apiKey) {
         res.status(401).send("Unauthorized: Missing FCE_API_KEY or Bearer token");
@@ -112,7 +197,7 @@ async function main() {
       });
     });
 
-    app.post('/messages', express.json(), async (req, res) => {
+    app.post('/messages', async (req, res) => {
       const sessionId = req.query.sessionId as string;
       const transport = transports.get(sessionId);
       
@@ -131,6 +216,8 @@ async function main() {
     const port = process.env.PORT || 3000;
     app.listen(port, () => {
       console.log(`FreeCustom.Email MCP Server running in SSE mode on port ${port}`);
+      console.log(`OAuth Client ID: ${CLIENT_ID}`);
+      console.log(`OAuth Client Secret: ${CLIENT_SECRET}`);
     });
   } else {
     // Stdio Mode

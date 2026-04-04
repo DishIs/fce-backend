@@ -41,6 +41,7 @@ services:
       - TRANSPORT=sse
       - PORT=3001
       - FCE_API_URL=${FCE_API_URL:-https://api2.freecustom.email/v1/mcp}
+      - MCP_BASE_URL=${MCP_BASE_URL:-https://mcp.freecustom.email}
     expose:
       - "3001"
     healthcheck:

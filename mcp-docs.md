@@ -67,9 +67,47 @@ https://mcp.freecustom.email
 ```
 
 ### Authentication
-Pass your API key via the `Authorization` header:
-```
+
+We support **two authentication methods**:
+
+#### Option 1: Direct API Key (Simple)
+Pass your API key via the `Authorization` header or `access_token` query param:
+```http
 Authorization: Bearer YOUR_API_KEY
+```
+Or:
+```
+GET /sse?access_token=YOUR_API_KEY
+```
+
+#### Option 2: OAuth 2.0 (Required by Some Clients)
+Some AI clients (like Claude Web) require OAuth. We implement a simplified OAuth flow where your API key acts as the `client_id`:
+
+1. **Authorize**: Redirect user to:
+```
+GET /authorize?client_id=YOUR_API_KEY&redirect_uri=REDIRECT_URI&state=STATE&code_challenge=CHALLENGE&code_challenge_method=S256
+```
+
+2. **Token Exchange**: Client exchanges the auth code for a token:
+```http
+POST /token
+Content-Type: application/x-www-form-urlencoded
+
+grant_type=authorization_code&code=AUTH_CODE&client_id=YOUR_API_KEY
+```
+
+3. **Response**:
+```json
+{
+  "access_token": "YOUR_API_KEY",
+  "token_type": "Bearer",
+  "expires_in": 31536000
+}
+```
+
+The OAuth metadata is available at:
+```
+GET /.well-known/oauth-authorization-server
 ```
 
 ### Endpoints
@@ -78,6 +116,9 @@ Authorization: Bearer YOUR_API_KEY
 | :--- | :--- | :--- |
 | `/sse` | GET | Establish SSE connection for real-time MCP communication |
 | `/messages` | POST | Send JSON-RPC messages to the MCP server |
+| `/authorize` | GET | OAuth authorization endpoint |
+| `/token` | POST | OAuth token exchange endpoint |
+| `/.well-known/oauth-authorization-server` | GET | OAuth metadata |
 
 ---
 
@@ -85,11 +126,26 @@ Authorization: Bearer YOUR_API_KEY
 
 Establishes a Server-Sent Events stream for bidirectional communication with the MCP server.
 
-**Request:**
+**With Direct API Key:**
 ```http
 GET /sse HTTP/1.1
 Host: mcp.freecustom.email
 Authorization: Bearer YOUR_API_KEY
+Accept: text/event-stream
+```
+
+**With OAuth Token:**
+```http
+GET /sse HTTP/1.1
+Host: mcp.freecustom.email
+Authorization: Bearer OAUTH_ACCESS_TOKEN
+Accept: text/event-stream
+```
+
+**With Query Param:**
+```http
+GET /sse?access_token=YOUR_API_KEY HTTP/1.1
+Host: mcp.freecustom.email
 Accept: text/event-stream
 ```
 
