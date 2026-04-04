@@ -294,31 +294,30 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
         };
         
         const user = await db.collection('users').findOne(userQuery(userId));
-        const isNewPro = user?.plan !== 'pro';
+        const actualWyiUserId = user?.wyiUserId || userId;
         
         await db.collection('users').updateOne(userQuery(userId), {
           $set: { plan: 'pro', subscription: subscriptionData },
           $unset: { scheduledDowngradeAt: '' },
         });
         
-        if (rawStatus === 'TRIALING') {
+        if (rawStatus === 'TRIALING' || payload.status?.toLowerCase() === 'trialing') {
           await db.collection('users').updateOne(userQuery(userId), { $set: { hadTrial: true } });
         }
         
-        if (isNewPro && !user?.everReceivedProBonusCredits) {
+        if (!user?.everReceivedProBonusCredits) {
           const userFingerprints = user?.fingerprints || [];
           let canGiveBonus = true;
           
           if (userFingerprints.length > 0) {
             const siblingWithBonus = await db.collection('users').findOne({
-              $or: [
-                { wyiUserId: { $ne: userId }, fingerprints: { $in: userFingerprints }, everReceivedProBonusCredits: true },
-                { linkedProviderIds: { $ne: userId }, fingerprints: { $in: userFingerprints }, everReceivedProBonusCredits: true },
-              ],
+              wyiUserId: { $ne: actualWyiUserId },
+              fingerprints: { $in: userFingerprints },
+              everReceivedProBonusCredits: true
             });
             if (siblingWithBonus) {
               canGiveBonus = false;
-              console.log(`[Paddle] User ${userId} denied bonus - sibling on same fingerprint already received it.`);
+              console.log(`[Paddle] User ${actualWyiUserId} denied bonus - sibling on same fingerprint already received it.`);
             }
           }
           
@@ -330,11 +329,12 @@ export async function handlePaddleSubscriptionEvent(req: Request, res: Response)
                 everReceivedProBonusCredits: true,
               },
             });
-            console.log(`[Paddle] Added 20k bonus credits to new PRO user ${userId}.`);
+            console.log(`[Paddle] Added 20k bonus credits to PRO user ${actualWyiUserId}.`);
           } else {
             await db.collection('users').updateOne(userQuery(userId), {
               $set: { 
                 receivedProBonusCredits: true,
+                everReceivedProBonusCredits: true,
               },
             });
           }
