@@ -28,6 +28,8 @@ To use this MCP server, you must have a **Growth** or **Enterprise** plan on Fre
 
 You will need your API key, which can be found in your FreeCustom.Email dashboard.
 
+> **Want to use MCP in web-based AI tools?** We host a public SSE endpoint at `https://mcp.freecustom.email/sse` that works with Claude Web, OpenAI Playground, Replit Agent, and any other cloud AI platform—no local installation required. Just pass your API key via the `Authorization: Bearer` header.
+
 ## Installation & Configuration
 
 ### For Claude Desktop
@@ -101,13 +103,31 @@ Add the following configuration to your `kilo.json` or `~/.config/kilo/kilo.json
 
 ### For Claude Web Chat (claude.ai)
 
-**Important:** The Claude web interface (claude.ai) operates differently than desktop agents. It requires a **Remote MCP Server URL** that uses an SSE (Server-Sent Events) connection, meaning it cannot run local `npx` commands.
+The Claude web interface requires a **Remote MCP Server URL**. We provide a hosted SSE endpoint at `https://mcp.freecustom.email/sse` that works directly with Claude Web without needing any local setup.
 
-Because this package is designed as a **Local Stdio** server for desktop agents, you have two options for Claude:
-1. **Recommended:** Download and use the [Claude Desktop App](https://claude.ai/download). It natively supports local `npx` commands and allows you to follow the "Claude Desktop" setup above seamlessly.
-2. **Custom Hosting:** If you *must* use Claude Web, you will need to host this SDK via HTTP/SSE. See our complete [Production SSE Hosting Guide](SSE-HOSTING.md) to deploy it securely using Docker and Nginx. Once hosted, you can provide your secure public URL (`https://mcp.freecustom.email/sse`) into the "Remote MCP server URL" field in Claude Web, and configure your API Key via OAuth/Bearer token headers.
+1. Open [Claude Web](https://claude.ai) (or the Claude app on mobile).
+2. Go to **Settings** > **Integrations** > **Add Custom Connector**.
+3. Fill in the details:
+   - **Name:** `FreeCustom.Email MCP`
+   - **Remote MCP Server URL:** `https://mcp.freecustom.email/sse`
+4. Under **Advanced settings**, add your API key as the **OAuth Client ID** (or just paste your FreeCustom.Email API key).
+5. Click **Connect**.
 
-## Best Practices & Example Prompts
+### For Web-Based AI Platforms (SSE Support)
+
+Many AI platforms that run in the browser or in the cloud require an HTTP/SSE endpoint instead of local commands. We've got you covered with our hosted endpoint at `https://mcp.freecustom.email/sse`.
+
+Simply point these platforms to our SSE URL and pass your API key via the Authorization header:
+
+| Platform | How to Configure |
+| :--- | :--- |
+| **Claude.ai (Web)** | Settings → Integrations → Add Custom Connector → URL: `https://mcp.freecustom.email/sse` |
+| **OpenAI Playground** | Use custom "OpenAI Agents" with our SSE URL as the MCP endpoint |
+| **Replit Agent** | Add MCP server with URL: `https://mcp.freecustom.email/sse` + Bearer token auth |
+| **Agentops / LangChain Apps** | Configure MCP client with our SSE URL, pass `Authorization: Bearer <YOUR_API_KEY>` |
+| **Custom Web Agents** | Connect to `https://mcp.freecustom.email/sse` with SSE client + Bearer auth |
+
+### For Desktop Agents (Local Stdio)
 
 Because AI models (like Claude) have strict safety guardrails against "automated bot behavior," they may refuse prompts that sound like malicious account creation. Additionally, standard desktop agents do not have built-in web browsers. 
 
@@ -147,8 +167,10 @@ Directly retrieves the latest 4-6 digit code or verification link.
 **"I don't have a create_and_wait_for_otp tool"**
 If your AI agent says it doesn't have the tool, it means the MCP server failed to load or the configuration hasn't been read yet.
 - **Restart the App:** Desktop agents (Claude Desktop, Cursor) *only* read the config file on startup. Completely quit the application (`Cmd+Q` or `Ctrl+Q`) and open it again.
-- **Using the Web Version:** As mentioned above, local MCP servers do not work on the Claude.ai web chat. You must use the downloaded desktop application.
 - **Check Logs:** Check your agent's logs to see if the server failed to start. For Claude on macOS, run: `tail -n 50 ~/Library/Logs/Claude/mcp*.log`
+
+**"Using Claude Web (claude.ai)"**
+If you're using Claude on the web and getting errors, ensure you configured the **Remote MCP Server URL** to our hosted SSE endpoint: `https://mcp.freecustom.email/sse`. Make sure your API key is passed in the OAuth Client ID field or as a Bearer token. For more details, see the "For Claude Web Chat" section above.
 
 **"npx: command not found" or PATH issues**
 Sometimes GUI desktop applications don't inherit your terminal's `$PATH` and cannot find Node.js or `npx`. If the server fails to boot, you can bypass `npx` by providing the absolute paths to Node and the package:
