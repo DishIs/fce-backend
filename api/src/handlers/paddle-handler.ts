@@ -115,6 +115,9 @@ async function handleApiPlanEvent(
       if (isTrialing) {
         await db.collection('users').updateOne(userQuery(userId), { $set: { hadApiTrial: true } });
       }
+      await db.collection('users').updateOne(userQuery(userId), {
+        $set: { banStatus: 'none', banReason: '', banAt: null }
+      });
       await logPaymentEvent(userId, subscriptionId, 'subscription_created', payload);
       console.log(`[Paddle] User ${userId} API plan activated: ${apiPlan}`);
       break;

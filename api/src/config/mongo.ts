@@ -168,7 +168,7 @@ export interface IUser {
   cardFingerprints?: string[];
 
   // ── Ban system ────────────────────────────────────────────────────────────
-  banStatus?: 'none' | 'warned' | 'banned';
+  banStatus?: 'banned' | 'warned' | 'none';
   banReason?: string;
   banAt?: Date;
   chargebackOffenses?: number; // incremented on each detected chargeback attempt
