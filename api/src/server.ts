@@ -58,7 +58,7 @@ import { attachIdentityContext, progressiveFrictionEngine } from './middlewares/
 import { verifySignature } from './utils/crypto';
 import { autoChargeApiPlanHandler, autoChargeCreditsHandler } from './handlers/auto-billing-handler';
 import { getUserWebhooksHandler, getUserWebhookLogsHandler, addWebhookHandler, deleteWebhookHandler, regenerateWebhookSecretHandler, getWebhookByIdHandler } from './handlers/internal-webhooks';
-import { handleNowPaymentsEvent, changeNowPaymentsPlanHandler } from './handlers/nowpayments-handler';
+import { handleNowPaymentsEvent, changeNowPaymentsPlanHandler, linkPendingSubscription } from './handlers/nowpayments-handler';
 
 declare global {
   namespace Express {
@@ -269,6 +269,7 @@ connectToMongo().then(() => {
 
   // ── NOWPayments (crypto) ────────────────────────────────────────────────────
   app.post('/nowpayments/event', handleNowPaymentsEvent);
+  app.post('/nowpayments/link', linkPendingSubscription);
   app.post('/nowpayments/change-plan', changeNowPaymentsPlanHandler);
 
 

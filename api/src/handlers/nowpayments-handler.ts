@@ -471,6 +471,43 @@ async function handleAppPlanEvent(
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
+//  LINK PENDING SUBSCRIPTION   POST /nowpayments/link
+//  Stores subscriptionId → userId link BEFORE payment so webhook can resolve user.
+// ═════════════════════════════════════════════════════════════════════════════
+
+export async function linkPendingSubscription(req: Request, res: Response) {
+  const { userId, subscriptionId, productType = 'app' } = req.body as {
+    userId: string;
+    subscriptionId: string;
+    productType?: 'app' | 'api';
+  };
+
+  if (!userId || !subscriptionId) {
+    return res.status(400).json({ success: false, message: 'userId and subscriptionId required' });
+  }
+
+  const subField = productType === 'api' ? 'apiCryptoSubscription' : 'cryptoSubscription';
+
+  const q = { $or: [{ wyiUserId: userId }, { linkedProviderIds: userId }] };
+
+  await db.collection('users').updateOne(q, {
+    $set: {
+      [`${subField}`]: {
+        provider:          'nowpayments',
+        subscriptionId,
+        status:            'PENDING',
+        cancelAtPeriodEnd: false,
+        startTime:         new Date().toISOString(),
+        lastUpdated:       new Date(),
+      },
+    },
+  });
+
+  console.log(`[NowPayments] Linked pending ${productType} sub ${subscriptionId} to user ${userId}`);
+  return res.status(200).json({ success: true });
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
 //  MAIN HANDLER   POST /nowpayments/event
 // ═════════════════════════════════════════════════════════════════════════════
 
