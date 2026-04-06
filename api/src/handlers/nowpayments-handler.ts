@@ -38,28 +38,33 @@ import { client as redis }   from '../config/redis';
 // ═════════════════════════════════════════════════════════════════════════════
 
 export interface NowPaymentsEventPayload {
-  eventType:       'ACTIVATED' | 'PAYMENT_COMPLETED' | 'PAYMENT_FAILED' | 'REFUNDED' | 'CANCELLED';
-  productType?:    'app' | 'api' | 'credits';
-  apiPlan?:        ApiPlanName;
-  creditsToAdd?:   number;
-  userId?:         string;
-  subscriptionId?: string;   // NP subscription_id (recurring) or payment_id (invoice)
-  amount?:         string;
-  currency?:       string;
-  startTime?:      string;
-  rawEvent:        any;
+  eventType:             'ACTIVATED' | 'PAYMENT_COMPLETED' | 'PAYMENT_FAILED' | 'REFUNDED' | 'CANCELLED';
+  productType?:          'app' | 'api' | 'credits';
+  apiPlan?:              ApiPlanName;
+  billing?:             'monthly' | 'yearly';
+  creditsToAdd?:        number;
+  userId?:               string;
+  invoiceId?:            string;  // NP invoice_id (for invoice-based subscriptions)
+  subscriptionId?:       string;  // NP subscription_id (legacy/recurring subscriptions)
+  amount?:               string;
+  currency?:             string;
+  isCryptoSubscription?: boolean; // true if invoice-based subscription (needs renewal)
+  startTime?:            string;
+  rawEvent:              any;
 }
 
 // Shape stored under user.cryptoSubscription / user.apiCryptoSubscription
 interface CryptoSubDoc {
-  provider:          'nowpayments';
-  subscriptionId:    string;
-  status:            'ACTIVE' | 'SUSPENDED' | 'PENDING_RENEWAL';
-  cancelAtPeriodEnd: boolean;
-  startTime:         string;
+  provider:           'nowpayments';
+  subscriptionId:     string; // invoiceId for invoice-based, subscription_id for legacy
+  status:             'ACTIVE' | 'SUSPENDED' | 'PENDING_RENEWAL';
+  cancelAtPeriodEnd:  boolean;
+  startTime:          string;
   lastUpdated:       Date;
-  canceledAt?:       string;
-  periodEnd?:        string;
+  canceledAt?:        string;
+  periodEnd?:         string;
+  billingCycle?:      'monthly' | 'yearly'; // For invoice-based recurring
+  isInvoiceBased?:    boolean; // true if created via invoice (not legacy subscription)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -172,8 +177,8 @@ async function handleApiPlanEvent(
   userId:    string,
   payload:   NowPaymentsEventPayload,
 ) {
-  const subscriptionId = payload.subscriptionId!;
-  const apiPlan        = payload.apiPlan ?? 'free';
+  const subscriptionId = payload.invoiceId ?? payload.subscriptionId ?? '';
+  const apiPlan       = payload.apiPlan ?? 'free';
 
   switch (eventType) {
 
@@ -185,12 +190,14 @@ async function handleApiPlanEvent(
       const isRenewal = eventType === 'PAYMENT_COMPLETED';
 
       const cryptoSubDoc: CryptoSubDoc = {
-        provider:          'nowpayments',
-        subscriptionId,
-        status:            'ACTIVE',
+        provider:           'nowpayments',
+        subscriptionId:     subscriptionId,
+        status:             'ACTIVE',
         cancelAtPeriodEnd: false,
-        startTime:         payload.startTime ?? new Date().toISOString(),
+        startTime:          payload.startTime ?? new Date().toISOString(),
         lastUpdated:       new Date(),
+        billingCycle:     payload.billing,
+        isInvoiceBased:    payload.isCryptoSubscription ?? false,
       };
 
       await db.collection('users').updateOne(userQuery(userId), {
@@ -300,14 +307,17 @@ async function handleAppPlanEvent(
     case 'ACTIVATED':
     case 'PAYMENT_COMPLETED': {
       const isRenewal = eventType === 'PAYMENT_COMPLETED';
+      const subId = payload.invoiceId ?? payload.subscriptionId ?? '';
 
       const cryptoSubDoc: CryptoSubDoc = {
-        provider:          'nowpayments',
-        subscriptionId,
-        status:            'ACTIVE',
+        provider:           'nowpayments',
+        subscriptionId:    subId,
+        status:             'ACTIVE',
         cancelAtPeriodEnd: false,
         startTime:         payload.startTime ?? new Date().toISOString(),
         lastUpdated:       new Date(),
+        billingCycle:     payload.billing,
+        isInvoiceBased:   payload.isCryptoSubscription ?? false,
       };
 
       // Need the full user doc for fingerprint bonus-credit check
@@ -516,6 +526,7 @@ export async function handleNowPaymentsEvent(req: Request, res: Response) {
   const {
     eventType,
     subscriptionId,
+    invoiceId,
     userId: rawUserId,
     productType = 'app',
   } = payload;
@@ -527,13 +538,15 @@ export async function handleNowPaymentsEvent(req: Request, res: Response) {
   // Resolve userId: provided in payload first, then fall back to DB lookup.
   // The DB lookup handles IPN retries where the payload metadata might be missing.
   let userId = rawUserId;
-  if (!userId && subscriptionId) {
-    const u = await findUserByNpSubscriptionId(subscriptionId);
+  // Try subscriptionId first (legacy subscriptions), then invoiceId (invoice-based)
+  const idToCheck = invoiceId ?? subscriptionId;
+  if (!userId && idToCheck) {
+    const u = await findUserByNpSubscriptionId(idToCheck);
     if (u) userId = u.wyiUserId;
   }
 
   if (!userId) {
-    console.warn(`[NowPayments] Could not resolve userId for subscriptionId=${subscriptionId}`);
+    console.warn(`[NowPayments] Could not resolve userId for invoiceId=${invoiceId} subscriptionId=${subscriptionId}`);
     // Return 200 so NP stops retrying — log as orphan for manual review.
     return res.status(200).json({ success: true, warning: 'User not found, logged as orphan.' });
   }
