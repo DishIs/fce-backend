@@ -62,6 +62,7 @@ export const DOMAIN_REGISTRY: DomainEntry[] = [
   { domain: 'ditmail.pro', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new', 'featured'],    active: true  },
   { domain: 'isapi.live', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
   { domain: 'mock-api.pro', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new', 'featured'],    active: true  },
+  { domain: 'letstalkbout.biz', tier: 'pro',  expiresAt: '2027-04-05', tags: ['new', 'featured'],    active: true  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
