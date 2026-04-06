@@ -58,6 +58,7 @@ import { attachIdentityContext, progressiveFrictionEngine } from './middlewares/
 import { verifySignature } from './utils/crypto';
 import { autoChargeApiPlanHandler, autoChargeCreditsHandler } from './handlers/auto-billing-handler';
 import { getUserWebhooksHandler, getUserWebhookLogsHandler, addWebhookHandler, deleteWebhookHandler, regenerateWebhookSecretHandler, getWebhookByIdHandler } from './handlers/internal-webhooks';
+import { handleNowPaymentsEvent, changeNowPaymentsPlanHandler } from './handlers/nowpayments-handler';
 
 declare global {
   namespace Express {
@@ -222,7 +223,7 @@ connectToMongo().then(() => {
   app.get('/statistics/platform-stats', async (req, res) => {
     try {
       const monthStr = new Date().toISOString().slice(0, 7);
-      
+
       // Get all rate limit keys to sum API calls
       let totalApiCalls = 0;
       const keys = await redis.keys(`rl:m:*:${monthStr}`);
@@ -230,13 +231,13 @@ connectToMongo().then(() => {
         const values = await redis.mGet(keys);
         totalApiCalls = values.reduce((acc, val) => acc + (parseInt(val || '0', 10)), 0);
       }
-      
+
       // Get active users (those who have an active rate limit key this month)
       const activeApiUsers = keys.length;
-      
+
       // Emails received from redis stats
       const totalEmails = await redis.get('stats:emails_received') || '0';
-      
+
       res.json({
         success: true,
         data: {
@@ -265,6 +266,11 @@ connectToMongo().then(() => {
   app.post('/paddle/subscription-event', handlePaddleSubscriptionEvent);
   app.get('/user/payment-logs/:wyiUserId', getPaymentLogsHandler);
   app.post('/user/api-plan/change', changeApiPlanHandler);
+
+  // ── NOWPayments (crypto) ────────────────────────────────────────────────────
+  app.post('/nowpayments/event', handleNowPaymentsEvent);
+  app.post('/nowpayments/change-plan', changeNowPaymentsPlanHandler);
+
 
   // ── API key management ─────────────────────────────────────────────────────
   app.post('/user/api-keys', generateApiKeyHandler);

@@ -92,18 +92,18 @@ async function propagateTrialFlags(
 // ─────────────────────────────────────────────────────────────────────────────
 
 export async function getUserStatusHandler(req: Request, res: Response) {
-  const { userId, ip } = req.body;
-
+  const { userId } = req.body;
+ 
   if (!userId) {
     return res.status(400).json({ success: false, message: 'User ID required' });
   }
-
+ 
   try {
     const user = await getUser(userId);
     if (!user) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
-
+ 
     const u = user as any;
     const deletionStatus      = u.deletionStatus || 'none';
     const scheduledDeletionAt = u.scheduledDeletionAt ? new Date(u.scheduledDeletionAt) : null;
@@ -111,22 +111,48 @@ export async function getUserStatusHandler(req: Request, res: Response) {
       deletionStatus === 'scheduled' && scheduledDeletionAt
         ? scheduledDeletionAt.toISOString()
         : null;
-
+ 
     const banStatus = u.banStatus || 'none';
-
+ 
+    // ── Resolve the "effective" active subscription provider for the app plan ─
+    // Priority: Paddle > NOWPayments. Used by the profile billing tab.
+    const paddleSub  = u.subscription       ?? null;
+    const cryptoSub  = u.cryptoSubscription ?? null;
+ 
+    const paddleActive = paddleSub && ['ACTIVE', 'TRIALING'].includes((paddleSub.status ?? '').toUpperCase());
+    const cryptoActive = cryptoSub && cryptoSub.status === 'ACTIVE';
+ 
+    const activeProvider: string | null =
+      paddleActive ? 'paddle' :
+      cryptoActive ? 'nowpayments' :
+      paddleSub    ? 'paddle' :     // expired but show for history
+      cryptoSub    ? 'nowpayments' :
+      null;
+ 
     return res.status(200).json({
       success:                true,
       plan:                   user.plan,
+ 
+      // ── Paddle app sub (unchanged) ─────────────────────────────────────────
       subscriptionStatus:     user.subscription?.status,
+ 
+      // ── Active provider for the app plan ──────────────────────────────────
+      activeSubscriptionProvider: activeProvider,
+ 
+      // ── Crypto (NOWPayments) app sub status ────────────────────────────────
+      cryptoSubscriptionStatus: cryptoSub?.status ?? null,
+ 
+      // ── Scheduled downgrade (app plan, both providers write this) ─────────
+      scheduledDowngradeAt: u.scheduledDowngradeAt
+        ? new Date(u.scheduledDowngradeAt).toISOString()
+        : null,
+ 
       hadTrial:               user.hadTrial    || false,
       hadApiTrial:            (u.hadApiTrial)  || false,
       deletion_status:        deletionStatus,
       deletion_scheduled_at:  scheduledDeletionAt ? scheduledDeletionAt.toISOString() : null,
       can_restore_until:      canRestoreUntil,
-
-      // ── Ban info ────────────────────────────────────────────────────────────
-      // Frontend uses banStatus to show a "you're banned" screen with a reason
-      // and a "contact support" link.
+ 
       banStatus,
       ...(banStatus !== 'none' && {
         banReason:    u.banReason    || 'Policy violation.',
