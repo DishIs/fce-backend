@@ -9,6 +9,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import { db } from '../config/mongo';
 import { client as redis } from '../config/redis';
 import { API_PLANS, ApiPlanName, ApiPlanConfig } from './api-plans';
@@ -53,6 +54,30 @@ export async function apiKeyAuth(
       message: 'API key required. Provide via "Authorization: Bearer <key>" header or "?api_key=<key>" query param.',
       docs:    'https://freecustom.email/docs/api',
     });
+  }
+
+  // --- Check if it is an Extension JWT token ---
+  if (rawKey.split('.').length === 3) {
+    try {
+      const secret = process.env.JWT_SECRET || 'fallback_dev_secret_only';
+      const decoded = jwt.verify(rawKey, secret) as any;
+      if (decoded.isExtension && decoded.userId && decoded.plan) {
+        req.apiUser = {
+          userId: decoded.userId,
+          apiKeyId: 'ext_token',
+          plan: decoded.plan as ApiPlanName,
+          planConfig: API_PLANS[decoded.plan as ApiPlanName] || API_PLANS.free,
+          credits: 0 // Extension tokens do not consume credits
+        };
+        return next();
+      }
+    } catch (err) {
+      return res.status(401).json({
+        success: false,
+        error: 'invalid_ext_token',
+        message: 'Invalid or expired extension token.'
+      });
+    }
   }
 
   const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');

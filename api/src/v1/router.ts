@@ -10,6 +10,7 @@ import inboxRouter from './routes/inbox';
 import domainsRouter from './routes/domains';
 import customDomainsRouter from './routes/custom-domains';
 import mcpRouter from './routes/mcp';
+import extRouter from './routes/ext';
 import { db } from '../config/mongo';
 import { API_PLANS, CREDIT_PACKAGES } from './api-plans';
 import webhookRouter from './routes/webhooks';
@@ -62,6 +63,7 @@ v1Router.use('/domains', domainsRouter);
 v1Router.use('/custom-domains', customDomainsRouter);
 v1Router.use('/webhooks', webhookRouter);
 v1Router.use('/mcp', mcpRouter);
+v1Router.use('/ext', extRouter);
 
 // ── GET /v1/me ────────────────────────────────────────────────────────────────
 v1Router.get('/me', async (req: Request, res: Response): Promise<any> => {
