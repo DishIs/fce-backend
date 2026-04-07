@@ -64,7 +64,7 @@ export async function apiKeyAuth(
       success: false,
       error:   'unauthorized',
       message: 'API key required. Provide via "Authorization: Bearer <key>" header or "?api_key=<key>" query param.',
-      docs:    'https://freecustom.email/docs/api',
+      docs:    'https://freecustom.email/api/docs',
     });
   }
 
