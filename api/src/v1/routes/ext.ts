@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getSettingsHandler, updateSettingsHandler } from '../../services/user';
 import { getDomainsHandler } from '../../services/user';
 import { listHandler, messageHandler, deleteHandler } from '../../services/mailbox';
+import { addInboxHandler } from '../../handlers/inbox-handler';
 import jwt from 'jsonwebtoken';
 
 const extRouter = Router();
@@ -30,6 +31,15 @@ extRouter.get('/ws-ticket', (req, res) => {
     console.error('ws-ticket error:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// Register inbox route
+extRouter.post('/register-inbox', (req, res, next) => {
+  if (!req.apiUser || req.apiUser.userId === 'anonymous') {
+    return res.status(401).json({ success: false, message: 'Authentication required to register inboxes' });
+  }
+  req.body.wyiUserId = req.apiUser.userId;
+  return addInboxHandler(req, res);
 });
 
 extRouter.get('/mailbox/:name', listHandler);
