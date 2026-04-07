@@ -3,11 +3,34 @@ import { getSettingsHandler, updateSettingsHandler } from '../../services/user';
 import { getDomainsHandler } from '../../services/user';
 import { listHandler, messageHandler, deleteHandler } from '../../services/mailbox';
 import { addInboxHandler } from '../../handlers/inbox-handler';
+import { db } from '../../config/mongo';
 import jwt from 'jsonwebtoken';
 
 const extRouter = Router();
 
 // Inherits apiKeyAuth and apiRateLimit from v1Router
+
+// Get user inboxes
+extRouter.get('/inboxes', async (req, res) => {
+  if (!req.apiUser || req.apiUser.userId === 'anonymous') {
+    return res.status(401).json({ success: false, message: 'Authentication required' });
+  }
+  
+  try {
+    const user = await db.collection('users').findOne({
+      $or: [
+        { wyiUserId: req.apiUser.userId },
+        { linkedProviderIds: req.apiUser.userId },
+      ],
+    }, { projection: { inboxes: 1 } });
+    
+    const inboxes = user?.inboxes || [];
+    return res.json({ success: true, data: inboxes });
+  } catch (error) {
+    console.error('Error fetching inboxes:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+});
 
 // WebSocket ticket route
 extRouter.get('/ws-ticket', (req, res) => {
