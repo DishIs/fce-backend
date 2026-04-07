@@ -48,6 +48,18 @@ export async function apiKeyAuth(
   }
 
   if (!rawKey) {
+    // For /ext/ws-ticket, allow anonymous access so unauthenticated users can still open WebSockets
+    if (req.path === '/ws-ticket' || req.path === '/ext/ws-ticket') {
+        req.apiUser = {
+          userId: 'anonymous',
+          apiKeyId: 'anonymous',
+          plan: 'free',
+          planConfig: API_PLANS.free,
+          credits: 0
+        };
+        return next();
+    }
+
     return res.status(401).json({
       success: false,
       error:   'unauthorized',
