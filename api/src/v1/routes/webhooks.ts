@@ -1,3 +1,4 @@
+import { logEvent } from '../../services/events-service';
 // api/src/v1/routes/webhooks.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  Webhook subscription management for Make.com, Zapier, and any REST-hooks
@@ -227,7 +228,8 @@ export async function notifyWebhooks(mailbox: string, event: any): Promise<void>
       .then(async (res) => {
         const success = res.ok;
         const duration = Date.now() - startTime;
-        await logWebhookEvent(hook, 'email.received', success ? 'success' : 'failed', res.status, {
+        logEvent({ inbox: mailbox, type: 'webhook_sent', metadata: { url: hook.url, status: success ? 'success' : 'failed' } }).catch(() => {});
+          await logWebhookEvent(hook, 'email.received', success ? 'success' : 'failed', res.status, {
           subject: event.subject,
           from: event.from,
           duration,

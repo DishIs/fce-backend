@@ -1,3 +1,4 @@
+import { getTimeline, getInsights } from '../../services/events-service';
 // api/src/v1/routes/inbox.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  All inbox operations for external API users.
@@ -486,3 +487,22 @@ router.get('/:inbox/wait', async (req: Request, res: Response): Promise<any> => 
 });
 
 export default router;
+inboxRouter.get('/:inbox/timeline', async (req, res) => {
+  try {
+    const { inbox } = req.params;
+    const timeline = await getTimeline(inbox);
+    res.json({ data: timeline });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+inboxRouter.get('/:inbox/insights', async (req, res) => {
+  try {
+    const { inbox } = req.params;
+    const insights = await getInsights(inbox);
+    res.json({ data: insights });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});

@@ -29,6 +29,9 @@ export interface ApiPlanConfig {
       maxConcurrent: number;
     };
     maxInboxes: number; // 0 = unlimited
+    timelineHistoryHours: number;
+    insights: boolean;
+    liveTimeline: boolean;
   };
 }
 
@@ -50,6 +53,9 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       mcpMultiplier: 1,
       mcpLimits: { opsPerMinute: 0, maxConcurrent: 0 },
       maxInboxes: 10,
+      timelineHistoryHours: 0,
+      insights: false,
+      liveTimeline: false,
     },
   },
   developer: {
@@ -69,6 +75,9 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       mcpMultiplier: 1,
       mcpLimits: { opsPerMinute: 0, maxConcurrent: 0 },
       maxInboxes: 25,
+      timelineHistoryHours: 0,
+      insights: false,
+      liveTimeline: false,
     },
   },
   startup: {
@@ -88,6 +97,9 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       mcpMultiplier: 1,
       mcpLimits: { opsPerMinute: 0, maxConcurrent: 0 },
       maxInboxes: 40,
+      timelineHistoryHours: 24,
+      insights: false,
+      liveTimeline: false,
     },
   },
   growth: {
@@ -107,6 +119,9 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       mcpMultiplier: 3,
       mcpLimits: { opsPerMinute: 60, maxConcurrent: 5 },
       maxInboxes: 100,
+      timelineHistoryHours: 168,
+      insights: true,
+      liveTimeline: true,
     },
   },
   enterprise: {
@@ -126,6 +141,9 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       mcpMultiplier: 3,
       mcpLimits: { opsPerMinute: 200, maxConcurrent: 10 },
       maxInboxes: 0,
+      timelineHistoryHours: 720,
+      insights: true,
+      liveTimeline: true,
     },
   },
 };

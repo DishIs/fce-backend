@@ -210,8 +210,6 @@ connectToMongo().then(() => {
   app.post('/user/inboxes', addInboxHandler);
   app.delete('/user/inboxes', deleteInboxHandler);
   app.get('/user/inbox-notes', getInboxNotesHandler);
-  app.get('/user/timeline', require('./handlers/events-handler').getUserTimelineHandler);
-  app.get('/user/insights', require('./handlers/events-handler').getUserInsightsHandler);
   app.post('/user/inbox-notes', upsertInboxNoteHandler);
   app.delete('/user/inbox-notes', deleteInboxNoteHandler);
 

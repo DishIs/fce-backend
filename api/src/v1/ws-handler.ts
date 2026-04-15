@@ -1,3 +1,4 @@
+import { logEvent } from '../services/events-service';
 // api/src/v1/ws-handler.ts
 // ─────────────────────────────────────────────────────────────────────────────
 //  WebSocket endpoint for the public developer API.
@@ -223,6 +224,7 @@ export function notifyApiWsClients(mailbox: string, event: any): void {
 
       try {
         client.ws.send(JSON.stringify(sanitized));
+        logEvent({ inbox: mailbox, type: 'websocket_sent', metadata: { userId: client.userId } }).catch(() => {});
       } catch (err) {
         console.error(`[api-ws] Failed to send event to client ${client.userId}:`, err);
       }

@@ -88,6 +88,45 @@ const OTP_REJECT = [
 
 const RE_OTP_CONTEXT_GUARD = new RegExp(OTP_KW, 'i');
 
+
+let currentTestRunId = undefined;
+function logTimelineEvent(destination, type, metadata) {
+    if (!redisClient || !redisClient.isOpen) return;
+    const ts = Date.now();
+    const eventId = Math.random().toString(36).substring(7);
+    const event = {
+        id: eventId,
+        inbox: destination,
+        type: type,
+        timestamp: ts,
+        metadata: metadata || {},
+        test_run_id: currentTestRunId
+    };
+    const eventStr = JSON.stringify(event);
+    redisClient.zAdd(`events:${destination}`, { score: ts, value: eventStr }).catch(() => {});
+    redisClient.expire(`events:${destination}`, 86400).catch(() => {});
+    
+    // Publish for WebSocket
+    redisClient.publish(`mailbox:events:${destination}`, JSON.stringify({
+        type: 'event_update',
+        payload: event
+    })).catch(() => {});
+}
+
+    if (!redisClient || !redisClient.isOpen) return;
+    const ts = Date.now();
+    const eventId = Math.random().toString(36).substring(7);
+    const event = {
+        id: eventId,
+        inbox: destination,
+        type: type,
+        timestamp: ts,
+        metadata: metadata || {}
+    };
+    redisClient.zAdd(`events:${destination}`, { score: ts, value: JSON.stringify(event) }).catch(() => {});
+    redisClient.expire(`events:${destination}`, 86400).catch(() => {});
+}
+
 function extractNumericOtp(subject, textBody) {
     const sources = [subject, textBody].filter(Boolean);
 
@@ -412,8 +451,11 @@ exports.tiered_save = async function (next, connection) {
 
         for (const recipient of connection.transaction.rcpt_to) {
             const destination = `${recipient.user}@${recipient.host}`.toLowerCase();
+            currentTestRunId = parsed.headers?.get('x-fce-test-run-id') || parsed.headers?.get('x-test-run-id') || 'tr_' + shortid.generate();
+            logTimelineEvent(destination, 'email_received');
             const { plan, userId, isVerified } = await getUserData(destination);
 
+            logTimelineEvent(destination, 'email_parsed', { subject: parsed.subject, from: parsed.from?.text });
             plugin.logdebug(`Processing email for ${destination} with plan: ${plan} (Verified: ${isVerified})`);
 
             let cfg;
@@ -500,6 +542,9 @@ exports.tiered_save = async function (next, connection) {
             // Pro users receive the actual value; free/anonymous receive a boolean teaser.
             const rawOtp              = extractOtp(parsed.subject, parsed.text);
             const rawVerificationLink = extractVerificationLink(parsed.html || parsed.textAsHtml, parsed.text);
+            if (rawOtp) {
+                logTimelineEvent(destination, 'otp_extracted', { otp: plan === 'pro' ? rawOtp : '__DETECTED__' });
+            }
 
             let otp, verificationLink;
             if (plan === 'pro') {

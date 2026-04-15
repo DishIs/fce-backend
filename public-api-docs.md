@@ -151,3 +151,50 @@ We enforce dynamic stability via our **Abuse Engine**:
 
 ---
 Need more scale? [Upgrade your plan](https://freecustom.email/pricing).
+
+### Timeline and Insights (New)
+
+The observability API provides a granular timeline of events for a specific inbox, useful for debugging email flows and OTP extraction.
+
+#### Get Inbox Timeline
+`GET /v1/inboxes/{inbox}/timeline`
+
+Returns an array of events:
+```json
+{
+  "data": [
+    {
+      "id": "abc1234",
+      "inbox": "test@ditmail.info",
+      "type": "email_received",
+      "timestamp": 1713175400000,
+      "latency_ms": 0
+    },
+    {
+      "id": "def5678",
+      "inbox": "test@ditmail.info",
+      "type": "otp_extracted",
+      "timestamp": 1713175400820,
+      "latency_ms": 820,
+      "metadata": {
+        "otp": "123456"
+      }
+    }
+  ]
+}
+```
+
+#### Get Inbox Insights
+`GET /v1/inboxes/{inbox}/insights`
+
+Returns a list of detected failures or warnings for an inbox. Requires Growth plan or higher.
+```json
+{
+  "data": [
+    {
+      "type": "slow_delivery",
+      "message": "Delivery and processing took over 3s"
+    }
+  ]
+}
+```
