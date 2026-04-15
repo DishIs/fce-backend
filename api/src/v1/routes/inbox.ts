@@ -503,4 +503,68 @@ router.get('/:inbox/wait', async (req: Request, res: Response): Promise<any> => 
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /v1/inboxes/:inbox/timeline — get timeline events
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/:inbox/timeline', async (req: Request, res: Response): Promise<any> => {
+  const inbox = req.params.inbox.toLowerCase();
+  const apiUser = req.apiUser!;
+
+  if (!apiUser.planConfig.features.liveTimeline && apiUser.planConfig.features.timelineHistoryHours <= 0) {
+    return res.status(403).json({
+      success: false,
+      error: 'plan_restriction',
+      message: 'Timeline access requires Growth plan ($49/mo) or above.',
+      upgrade_url: 'https://freecustom.email/api/pricing'
+    });
+  }
+
+  if (!(await assertOwned(apiUser.userId, inbox))) {
+    return res.status(403).json({
+      success: false,
+      error: 'inbox_not_owned',
+      message: 'Register this inbox first via POST /v1/inboxes.',
+    });
+  }
+
+  try {
+    const events = await getTimeline(inbox);
+    return res.json({ success: true, data: events });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'server_error' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /v1/inboxes/:inbox/insights — get diagnostic insights
+// ─────────────────────────────────────────────────────────────────────────────
+router.get('/:inbox/insights', async (req: Request, res: Response): Promise<any> => {
+  const inbox = req.params.inbox.toLowerCase();
+  const apiUser = req.apiUser!;
+
+  if (!apiUser.planConfig.features.insights) {
+    return res.status(403).json({
+      success: false,
+      error: 'plan_restriction',
+      message: 'Insights access requires Growth plan ($49/mo) or above.',
+      upgrade_url: 'https://freecustom.email/api/pricing'
+    });
+  }
+
+  if (!(await assertOwned(apiUser.userId, inbox))) {
+    return res.status(403).json({
+      success: false,
+      error: 'inbox_not_owned',
+      message: 'Register this inbox first via POST /v1/inboxes.',
+    });
+  }
+
+  try {
+    const insights = await getInsights(inbox);
+    return res.json({ success: true, data: insights });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'server_error' });
+  }
+});
+
 export default router;
