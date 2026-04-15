@@ -233,6 +233,7 @@ export async function getApiStatusHandler(req: Request, res: Response): Promise<
         app_inboxes: { list: appInboxes, count: appInboxes.length },
         api_inboxes: { list: apiInboxes, count: apiInboxes.length },
         inboxes:     { list: apiInboxes, count: apiInboxes.length },
+        testingInboxes: user.testingInboxes ?? [],
 
         upsell: {
           nudges:    upsellNudges,
