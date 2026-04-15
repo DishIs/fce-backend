@@ -228,13 +228,15 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
     const maxInboxes = apiUser.planConfig.features.maxInboxes;
     const currentInboxCount = (user.apiInboxes || []).length;
     
-    // Check if the user is trying to add a new inbox (not already registered)
-    const already = (user.apiInboxes ?? []).includes(normalized);
-    if (already) {
+    // Check if the user is trying to add a new inbox
+    const isAlreadyApiInbox = (user.apiInboxes ?? []).includes(normalized);
+    const isAlreadyTesting = (user.testingInboxes ?? []).includes(normalized);
+    
+    if (isAlreadyApiInbox && (isTesting ? isAlreadyTesting : true)) {
       return res.json({ success: true, message: 'Inbox already registered.', inbox: normalized });
     }
 
-    if (maxInboxes > 0 && currentInboxCount >= maxInboxes) {
+    if (maxInboxes > 0 && currentInboxCount >= maxInboxes && !isAlreadyApiInbox) {
       return res.status(403).json({
         success: false,
         error: 'inbox_limit_reached',
@@ -277,7 +279,7 @@ router.delete('/:inbox', async (req: Request, res: Response): Promise<any> => {
   try {
     await db.collection('users').updateOne(
       { wyiUserId: userId },
-      { $pull: { apiInboxes: inbox } as any },
+      { $pull: { apiInboxes: inbox, testingInboxes: inbox } as any },
     );
     await Promise.all([
       redis.del(`user_data_cache:${inbox}`),
