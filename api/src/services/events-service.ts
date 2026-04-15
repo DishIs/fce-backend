@@ -1,4 +1,4 @@
-import { redisClient, redisPubSub } from '../config/redis';
+import { client as redisClient, subscriber as redisPubSub } from '../config/redis';
 
 export type EmailEvent = {
   id: string;
@@ -26,8 +26,7 @@ export async function logEvent(event: Omit<EmailEvent, "id" | "timestamp">) {
     };
     
     const key = `events:${event.inbox}`;
-    await redisClient.zadd(key, fullEvent.timestamp, JSON.stringify(fullEvent));
-    // 24 hours TTL for free, can be extended based on plan
+    await redisClient.zAdd(key, { score: fullEvent.timestamp, value: JSON.stringify(fullEvent) });
     await redisClient.expire(key, 86400);
     
     if (redisPubSub) {
@@ -46,7 +45,7 @@ export async function logEvent(event: Omit<EmailEvent, "id" | "timestamp">) {
 export async function getTimeline(inbox: string): Promise<EmailEvent[]> {
   try {
     const key = `events:${inbox}`;
-    const eventsStr = await redisClient.zrange(key, 0, -1);
+    const eventsStr = await redisClient.zRange(key, 0, -1);
     
     if (!eventsStr || eventsStr.length === 0) return [];
     
