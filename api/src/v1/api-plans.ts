@@ -32,6 +32,7 @@ export interface ApiPlanConfig {
     timelineHistoryHours: number;
     insights: boolean;
     liveTimeline: boolean;
+    testingInboxes: boolean;
   };
 }
 
@@ -56,6 +57,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       timelineHistoryHours: 0,
       insights: false,
       liveTimeline: false,
+      testingInboxes: false,
     },
   },
   developer: {
@@ -78,6 +80,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       timelineHistoryHours: 0,
       insights: false,
       liveTimeline: false,
+      testingInboxes: false,
     },
   },
   startup: {
@@ -100,6 +103,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       timelineHistoryHours: 24,
       insights: false,
       liveTimeline: false,
+      testingInboxes: false,
     },
   },
   growth: {
@@ -122,6 +126,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       timelineHistoryHours: 168,
       insights: true,
       liveTimeline: true,
+      testingInboxes: true,
     },
   },
   enterprise: {
@@ -144,6 +149,7 @@ export const API_PLANS: Record<ApiPlanName, ApiPlanConfig> = {
       timelineHistoryHours: 720,
       insights: true,
       liveTimeline: true,
+      testingInboxes: true,
     },
   },
 };

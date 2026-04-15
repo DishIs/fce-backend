@@ -141,8 +141,17 @@ router.get('/', async (req: Request, res: Response): Promise<any> => {
 // POST /v1/inboxes — register an inbox
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/', async (req: Request, res: Response): Promise<any> => {
-  const { inbox } = req.body;
+  const { inbox, isTesting } = req.body;
   const apiUser   = req.apiUser!;
+
+  if (isTesting && !apiUser.planConfig.features.testingInboxes) {
+    return res.status(403).json({
+      success: false,
+      error: 'plan_restriction',
+      message: 'Testing inboxes require Growth plan ($49/mo) or above.',
+      upgrade_url: 'https://freecustom.email/api/pricing',
+    });
+  }
 
   if (!inbox) {
     return res.status(400).json({
@@ -234,15 +243,20 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
       });
     }
 
+    const updateQuery: any = { $addToSet: { apiInboxes: normalized } };
+    if (isTesting) {
+      updateQuery.$addToSet.testingInboxes = normalized;
+    }
+
     await db.collection('users').updateOne(
       { wyiUserId: apiUser.userId },
-      { $addToSet: { apiInboxes: normalized } },
+      updateQuery,
     );
 
     const internalPlan = apiPlanToInternalPlan(apiUser.plan);
     await redis.set(
       `user_data_cache:${normalized}`,
-      JSON.stringify({ plan: internalPlan, userId: user._id, isVerified: !isProvidedDomain }),
+      JSON.stringify({ plan: internalPlan, userId: user._id, isVerified: !isProvidedDomain, isTesting: !!isTesting }),
       { EX: 3600 },
     );
 
@@ -371,6 +385,7 @@ router.get('/:inbox/otp', async (req: Request, res: Response): Promise<any> => {
     return res.json({
       success:           true,
       otp:               latest.otp,
+      score:             latest.otpScore,
       email_id:          latest.id,
       from:              latest.from,
       subject:           latest.subject,
