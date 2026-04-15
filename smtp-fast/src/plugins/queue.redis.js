@@ -264,11 +264,7 @@ function extractAlphaOtp(subject, textBody) {
  * could also match a numeric pattern incorrectly.
  */
 function extractOtp(subject, textBody) {
-    const alpha = extractAlphaOtp(subject, textBody);
-    if (alpha) return { otp: alpha, score: 0.9 }; // Alphanumeric patterns are very specific
-    const numeric = extractNumericOtp(subject, textBody);
-    if (numeric) return { otp: numeric, score: 0.8 }; // Standard numeric fallback
-    return null;
+    return extractAlphaOtp(subject, textBody) || extractNumericOtp(subject, textBody);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -374,9 +370,8 @@ async function getUserData(recipientEmail) {
         user = await db.collection('users').findOne({ apiInboxes: normalized });
         if (user) {
             const internalPlan = apiPlanToInternalPlan(user.apiPlan);
-            const isTesting = Array.isArray(user.testingInboxes) && user.testingInboxes.includes(normalized);
-            userData = { plan: internalPlan, userId: user._id, isVerified: false, isTesting };
-            await redisClient.set(cacheKey, JSON.stringify({ plan: internalPlan, userId: user._id.toString(), isVerified: false, isTesting }), { EX: ttl });
+            userData = { plan: internalPlan, userId: user._id, isVerified: false };
+            await redisClient.set(cacheKey, JSON.stringify({ plan: internalPlan, userId: user._id.toString(), isVerified: false }), { EX: ttl });
             return userData;
         }
 
@@ -444,13 +439,11 @@ exports.tiered_save = async function (next, connection) {
         for (const recipient of connection.transaction.rcpt_to) {
             const destination = `${recipient.user}@${recipient.host}`.toLowerCase();
             currentTestRunId = parsed.headers?.get('x-fce-test-run-id') || parsed.headers?.get('x-test-run-id') || 'tr_' + shortid.generate();
-            
-            const { plan, userId, isVerified, isTesting } = await getUserData(destination);
+            logTimelineEvent(destination, 'email_received');
+            const { plan, userId, isVerified } = await getUserData(destination);
 
-            if (isTesting) logTimelineEvent(destination, 'email_received');
-
-            if (isTesting) logTimelineEvent(destination, 'email_parsed', { subject: parsed.subject, from: parsed.from?.text });
-            plugin.logdebug(`Processing email for ${destination} with plan: ${plan} (Verified: ${isVerified}, Testing: ${isTesting})`);
+            logTimelineEvent(destination, 'email_parsed', { subject: parsed.subject, from: parsed.from?.text });
+            plugin.logdebug(`Processing email for ${destination} with plan: ${plan} (Verified: ${isVerified})`);
 
             let cfg;
             if (plan === 'pro') {
@@ -534,19 +527,17 @@ exports.tiered_save = async function (next, connection) {
             // ── Extract OTP and verification link ─────────────────────────────
             // extractOtp now handles both numeric (847291) and alphanumeric (ZXH-QCS, AB12CD) codes.
             // Pro users receive the actual value; free/anonymous receive a boolean teaser.
-            const extractedOtpObj     = extractOtp(parsed.subject, parsed.text);
-            const rawOtp              = extractedOtpObj ? extractedOtpObj.otp : null;
-            const otpScore            = extractedOtpObj ? extractedOtpObj.score : null;
+            const rawOtp              = extractOtp(parsed.subject, parsed.text);
             const rawVerificationLink = extractVerificationLink(parsed.html || parsed.textAsHtml, parsed.text);
-            if (rawOtp && isTesting) {
-                logTimelineEvent(destination, 'otp_extracted', { otp: plan === 'pro' ? rawOtp : '__DETECTED__', score: otpScore });
+            if (rawOtp) {
+                logTimelineEvent(destination, 'otp_extracted', { otp: plan === 'pro' ? rawOtp : '__DETECTED__' });
             }
 
             let otp, verificationLink;
             if (plan === 'pro') {
                 otp              = rawOtp;
                 verificationLink = rawVerificationLink;
-                if (otp)              plugin.logdebug(`OTP extracted for ${destination}: ${otp} (score: ${otpScore})`);
+                if (otp)              plugin.logdebug(`OTP extracted for ${destination}: ${otp}`);
                 if (verificationLink) plugin.logdebug(`Verification link extracted for ${destination}`);
             } else {
                 otp              = rawOtp              ? '__DETECTED__' : null;
@@ -647,7 +638,6 @@ exports.tiered_save = async function (next, connection) {
                 text: parsed.text,
                 attachments: attachmentsForRedis,
                 otp,
-                otpScore,
                 verificationLink,
             };
 
@@ -666,7 +656,6 @@ exports.tiered_save = async function (next, connection) {
                     headers: parsed.headers,
                     storageUsed: totalNewAttachmentSize,
                     otp,
-                    otpScore,
                     verificationLink,
                 }).catch(err => plugin.logerror(`MongoDB insertOne failed for ${destination}: ${err}`));
             }
