@@ -1,26 +1,15 @@
 // api/src/handlers/nowpayments-handler.ts
 // ─────────────────────────────────────────────────────────────────────────────
-//  Handles all NOWPayments IPN events forwarded from the Next.js webhook route.
-//  Parallel to paddle-handler.ts — same DB fields, same syncUserFeatures logic.
-//
-//  HOW IT DIFFERS FROM PADDLE:
-//  • No trials (NOWPayments doesn't support trial periods).
-//  • Crypto subscriptions are stored under user.cryptoSubscription (app) and
-//    user.apiCryptoSubscription (API) — completely separate from the Paddle
-//    fields (user.subscription / user.apiSubscription), so both providers can
-//    coexist on the same user document without clobbering each other.
-//  • The effective plan fields (user.plan, user.apiPlan) are shared — whichever
-//    provider is active writes to them. syncUserFeatures() resolves the truth.
-//  • Upgrade/downgrade has no Paddle-style PATCH API. See changeNowPaymentsPlanHandler.
-//
-//  EVENT FLOW (what the NP webhook sends us):
-//    NP "confirmed"  → ACTIVATED       (early unlock on blockchain confirm)
-//    NP "sending"    → ACTIVATED       (same — funds en route to our wallet)
-//    NP "finished"   → PAYMENT_COMPLETED (fully settled — canonical renewal)
-//    NP "failed"     → PAYMENT_FAILED
-//    NP "expired"    → PAYMENT_FAILED
-//    NP "refunded"   → REFUNDED
-//    (CANCELLED is only sent by our own change-plan handler for explicit cancels)
+//  FIXES:
+//    Bug 1 – MongoDB path conflict in handleAppPlanEvent ACTIVATED/PAYMENT_COMPLETED:
+//             Removed $unset for 'cryptoSubscription.canceledAt' and
+//             'cryptoSubscription.periodEnd' which conflicted with
+//             $set: { cryptoSubscription: newDoc } on the same parent path.
+//             MongoDB throws "Updating the path 'cryptoSubscription.canceledAt'
+//             would create a conflict at 'cryptoSubscription'" causing a 500
+//             that silently lost the event (webhook was returning 200).
+//    Bug 4 – subscriptionId in handleAppPlanEvent was always undefined.
+//             Now uses payload.invoiceId ?? payload.subscriptionId ?? ''.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { Request, Response } from 'express';
@@ -44,27 +33,26 @@ export interface NowPaymentsEventPayload {
   billing?:             'monthly' | 'yearly';
   creditsToAdd?:        number;
   userId?:               string;
-  invoiceId?:            string;  // NP invoice_id (for invoice-based subscriptions)
-  subscriptionId?:       string;  // NP subscription_id (legacy/recurring subscriptions)
+  invoiceId?:            string;
+  subscriptionId?:       string;
   amount?:               string;
   currency?:             string;
-  isCryptoSubscription?: boolean; // true if invoice-based subscription (needs renewal)
+  isCryptoSubscription?: boolean;
   startTime?:            string;
   rawEvent:              any;
 }
 
-// Shape stored under user.cryptoSubscription / user.apiCryptoSubscription
 interface CryptoSubDoc {
   provider:           'nowpayments';
-  subscriptionId:     string; // invoiceId for invoice-based, subscription_id for legacy
+  subscriptionId:     string;
   status:             'ACTIVE' | 'SUSPENDED' | 'PENDING_RENEWAL';
   cancelAtPeriodEnd:  boolean;
   startTime:          string;
   lastUpdated:       Date;
   canceledAt?:        string;
   periodEnd?:         string;
-  billingCycle?:      'monthly' | 'yearly'; // For invoice-based recurring
-  isInvoiceBased?:    boolean; // true if created via invoice (not legacy subscription)
+  billingCycle?:      'monthly' | 'yearly';
+  isInvoiceBased?:    boolean;
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -75,7 +63,6 @@ const userQuery = (userId: string) => ({
   $or: [{ wyiUserId: userId }, { linkedProviderIds: userId }],
 });
 
-/** Lookup by NP subscriptionId for IPN events where userId may be missing. */
 async function findUserByNpSubscriptionId(subscriptionId: string) {
   return db.collection('users').findOne({
     $or: [
@@ -103,8 +90,6 @@ async function logPaymentEvent(
   } as IPaymentLog);
 }
 
-// ── NOWPayments REST helpers ──────────────────────────────────────────────────
-
 const NP_BASE = process.env.NOWPAYMENTS_SANDBOX === 'true'
   ? 'https://api.sandbox.nowpayments.io/v1'
   : 'https://api.nowpayments.io/v1';
@@ -115,7 +100,6 @@ async function cancelNpSubscription(subscriptionId: string): Promise<boolean> {
       method:  'DELETE',
       headers: { 'x-api-key': process.env.NOWPAYMENTS_API_KEY ?? '' },
     });
-    // 404 = already cancelled — treat as success so plan changes aren't blocked
     return res.ok || res.status === 404;
   } catch (err) {
     console.error(`[NowPayments] Failed to cancel subscription ${subscriptionId}:`, err);
@@ -124,7 +108,7 @@ async function cancelNpSubscription(subscriptionId: string): Promise<boolean> {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  CREDITS  (productType === 'credits')
+//  CREDITS
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function handleCreditPurchase(userId: string, payload: NowPaymentsEventPayload) {
@@ -134,8 +118,6 @@ async function handleCreditPurchase(userId: string, payload: NowPaymentsEventPay
     return;
   }
 
-  // Idempotency: NP can fire ACTIVATED then PAYMENT_COMPLETED for the same tx.
-  // Use NP payment_id as the key, namespaced 'np:' to avoid collision with Paddle keys.
   const txId     = payload.rawEvent?.payment_id ?? payload.subscriptionId ?? '';
   const idempKey = `credit_tx:np:${txId}`;
 
@@ -147,7 +129,6 @@ async function handleCreditPurchase(userId: string, payload: NowPaymentsEventPay
   await db.collection('users').updateOne(userQuery(userId), {
     $inc: { apiCredits: creditsToAdd },
   });
-  // Keep idempotency key for 90 days (same as Paddle)
   await redis.set(idempKey, '1', { EX: 90 * 24 * 3600 });
 
   await db.collection('payment_logs').insertOne({
@@ -169,7 +150,7 @@ async function handleCreditPurchase(userId: string, payload: NowPaymentsEventPay
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  API PLAN  (productType === 'api')
+//  API PLAN
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function handleApiPlanEvent(
@@ -182,9 +163,6 @@ async function handleApiPlanEvent(
 
   switch (eventType) {
 
-    // ── Activation / Renewal ─────────────────────────────────────────────────
-    // ACTIVATED      = blockchain confirmed, unlock early (like paddle subscription.activated)
-    // PAYMENT_COMPLETED = "finished", fully settled (like paddle transaction.completed → renewal)
     case 'ACTIVATED':
     case 'PAYMENT_COMPLETED': {
       const isRenewal = eventType === 'PAYMENT_COMPLETED';
@@ -208,8 +186,6 @@ async function handleApiPlanEvent(
           banReason: '',
           banAt:     null,
         },
-        // On renewal: clear any scheduled downgrade set by a previous downgrade request.
-        // This matches what paddle-handler does on PAYMENT_COMPLETED.
         $unset: {
           apiScheduledDowngradeAt:   '',
           apiScheduledDowngradePlan: '',
@@ -225,9 +201,6 @@ async function handleApiPlanEvent(
       break;
     }
 
-    // ── Payment failure / Expired ────────────────────────────────────────────
-    // Mirrors paddle-handler API SUSPENDED/PAYMENT_FAILED:
-    // only suspend the crypto sub — don't revert apiPlan to 'free' (Paddle doesn't either).
     case 'PAYMENT_FAILED': {
       await db.collection('users').updateOne(userQuery(userId), {
         $set: {
@@ -239,19 +212,11 @@ async function handleApiPlanEvent(
       break;
     }
 
-    // ── Explicit cancellation ────────────────────────────────────────────────
-    // Reached when a user explicitly cancels (e.g. via support).
-    // For plan-change downgrades the change-plan handler writes to DB directly
-    // and never routes through here.
     case 'CANCELLED': {
-      // periodEnd is injected by changeNowPaymentsPlanHandler when it fires a
-      // manual CANCELLED payload; for external cancellations fall back to now.
       const periodEnd = payload.rawEvent?.periodEnd ?? new Date().toISOString();
 
       await db.collection('users').updateOne(userQuery(userId), {
         $set: {
-          // Keep plan ACTIVE until periodEnd — resolveEffectivePlan() in the
-          // status worker will downgrade automatically once the date passes.
           'apiCryptoSubscription.status':            'ACTIVE',
           'apiCryptoSubscription.cancelAtPeriodEnd': true,
           'apiCryptoSubscription.canceledAt':        new Date().toISOString(),
@@ -264,7 +229,6 @@ async function handleApiPlanEvent(
       await logPaymentEvent(userId, subscriptionId, 'subscription_cancelled', payload);
       console.log(`[NowPayments] User ${userId} API plan cancelled. Access until ${periodEnd}.`);
 
-      // Fire-and-forget cancellation email (same as paddle-handler)
       db.collection('users').findOne(userQuery(userId)).then(user => {
         if (!user?.email) return;
         sendEmail({
@@ -277,8 +241,6 @@ async function handleApiPlanEvent(
       break;
     }
 
-    // ── Refund ───────────────────────────────────────────────────────────────
-    // Paddle API refund only logs — no plan state change. We match that.
     case 'REFUNDED': {
       await logPaymentEvent(userId, subscriptionId, 'refund', payload);
       console.log(`[NowPayments] API refund logged for ${userId}.`);
@@ -286,12 +248,11 @@ async function handleApiPlanEvent(
     }
   }
 
-  // Always sync features after any API plan event
   await syncUserFeatures(db, redis, userId);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-//  APP PRO PLAN  (productType === 'app')
+//  APP PRO PLAN — FIXED (Bug 1 + Bug 4)
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function handleAppPlanEvent(
@@ -299,11 +260,12 @@ async function handleAppPlanEvent(
   userId:    string,
   payload:   NowPaymentsEventPayload,
 ) {
-  const subscriptionId = payload.subscriptionId!;
+  // FIX Bug 4: was `payload.subscriptionId!` which is always undefined for
+  // invoice-based flows since the webhook never sets subscriptionId.
+  const subscriptionId = payload.invoiceId ?? payload.subscriptionId ?? '';
 
   switch (eventType) {
 
-    // ── Activation / Renewal ─────────────────────────────────────────────────
     case 'ACTIVATED':
     case 'PAYMENT_COMPLETED': {
       const isRenewal = eventType === 'PAYMENT_COMPLETED';
@@ -318,12 +280,24 @@ async function handleAppPlanEvent(
         lastUpdated:       new Date(),
         billingCycle:     payload.billing,
         isInvoiceBased:   payload.isCryptoSubscription ?? false,
+        // canceledAt and periodEnd intentionally omitted — this is a fresh
+        // activation. $set replaces the entire cryptoSubscription document so
+        // old cancellation fields are naturally absent.
       };
 
-      // Need the full user doc for fingerprint bonus-credit check
       const user            = await db.collection('users').findOne(userQuery(userId));
       const actualWyiUserId = user?.wyiUserId ?? userId;
 
+      // FIX Bug 1: REMOVED the $unset for 'cryptoSubscription.canceledAt' and
+      // 'cryptoSubscription.periodEnd'. Those lines caused MongoDB to throw:
+      //   "Updating the path 'cryptoSubscription.canceledAt' would create a
+      //    conflict at 'cryptoSubscription'"
+      // because you cannot $set a parent path and $unset a child of that same
+      // path in a single update operation. The $set already replaces the whole
+      // cryptoSubscription document, so the $unset was redundant AND broken.
+      //
+      // scheduledDowngradeAt is a separate root field (not a child of
+      // cryptoSubscription) so it remains safely in $unset.
       await db.collection('users').updateOne(userQuery(userId), {
         $set: {
           plan:               'pro',
@@ -332,18 +306,14 @@ async function handleAppPlanEvent(
           banReason:          '',
           banAt:              null,
         },
-        // Clear any scheduled downgrade from a previous cancellation or downgrade.
-        // On renewal this is a fresh billing period — same as paddle-handler PAYMENT_COMPLETED.
         $unset: {
-          scheduledDowngradeAt:    '',
-          'cryptoSubscription.canceledAt':  '',
-          'cryptoSubscription.periodEnd':   '',
+          scheduledDowngradeAt: '',
+          // 'cryptoSubscription.canceledAt'  ← REMOVED: conflicts with $set above
+          // 'cryptoSubscription.periodEnd'   ← REMOVED: conflicts with $set above
         },
       });
 
       // ── Pro bonus credits (fingerprint-gated, first activation only) ────────
-      // Matches paddle-handler ACTIVATED logic exactly.
-      // isRenewal guard prevents re-awarding on every monthly renewal.
       if (!isRenewal && !user?.everReceivedProBonusCredits) {
         const userFingerprints = user?.fingerprints ?? [];
         let canGiveBonus = true;
@@ -367,7 +337,6 @@ async function handleAppPlanEvent(
           });
           console.log(`[NowPayments] Added 20k bonus credits to PRO user ${actualWyiUserId}.`);
         } else {
-          // Mark as having been considered (prevents re-check on next activation)
           await db.collection('users').updateOne(userQuery(userId), {
             $set: { receivedProBonusCredits: true, everReceivedProBonusCredits: true },
           });
@@ -381,7 +350,6 @@ async function handleAppPlanEvent(
       );
       console.log(`[NowPayments] User ${userId} ${isRenewal ? 'renewed' : 'upgraded to'} PRO.`);
 
-      // Migrate existing emails to Pro storage quota (first activation only)
       if (!isRenewal) {
         migrateUserEmailsToPro(userId).catch(err =>
           console.error(`[NowPayments] Email migration failed for ${userId}:`, err),
@@ -390,9 +358,6 @@ async function handleAppPlanEvent(
       break;
     }
 
-    // ── Payment failure ───────────────────────────────────────────────────────
-    // Matches paddle-handler PAYMENT_FAILED for app:
-    // suspend sub, revoke apiPlan + proBonusCredits, sync features.
     case 'PAYMENT_FAILED': {
       await db.collection('users').updateOne(userQuery(userId), {
         $set: {
@@ -408,13 +373,11 @@ async function handleAppPlanEvent(
       break;
     }
 
-    // ── Explicit cancellation ─────────────────────────────────────────────────
-    // Matches paddle-handler CANCELLED for app exactly.
-    // The plan stays ACTIVE until periodEnd; the scheduled-downgrade worker
-    // flips it to free once the date passes.
     case 'CANCELLED': {
       const periodEnd = payload.rawEvent?.periodEnd ?? new Date().toISOString();
 
+      // Safe: we are dot-notating INTO the existing cryptoSubscription sub-fields,
+      // NOT replacing the parent document, so no MongoDB path conflict here.
       await db.collection('users').updateOne(userQuery(userId), {
         $set: {
           'cryptoSubscription.status':            'ACTIVE',
@@ -423,8 +386,6 @@ async function handleAppPlanEvent(
           'cryptoSubscription.periodEnd':         periodEnd,
           'cryptoSubscription.lastUpdated':       new Date(),
           scheduledDowngradeAt:                   new Date(periodEnd),
-          // Revoke API plan and bonus credits immediately on app cancel,
-          // same as paddle-handler CANCELLED for app.
           apiPlan:         'free',
           proBonusCredits: 0,
         },
@@ -435,7 +396,6 @@ async function handleAppPlanEvent(
       await logPaymentEvent(userId, subscriptionId, 'subscription_cancelled', payload);
       console.log(`[NowPayments] User ${userId} cancelled. Pro access until ${periodEnd}.`);
 
-      // Fire-and-forget cancellation email with storage/email-count summary
       db.collection('users').findOne(userQuery(userId)).then(async user => {
         if (!user?.email) return;
         const [emailCount, storageResult] = await Promise.all([
@@ -461,8 +421,6 @@ async function handleAppPlanEvent(
       break;
     }
 
-    // ── Refund ────────────────────────────────────────────────────────────────
-    // Matches paddle-handler REFUNDED for app: set plan=free, revoke everything.
     case 'REFUNDED': {
       await db.collection('users').updateOne(userQuery(userId), {
         $set: {
@@ -482,7 +440,6 @@ async function handleAppPlanEvent(
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  LINK PENDING SUBSCRIPTION   POST /nowpayments/link
-//  Stores subscriptionId → userId link BEFORE payment so webhook can resolve user.
 // ═════════════════════════════════════════════════════════════════════════════
 
 export async function linkPendingSubscription(req: Request, res: Response) {
@@ -497,7 +454,6 @@ export async function linkPendingSubscription(req: Request, res: Response) {
   }
 
   const subField = productType === 'api' ? 'apiCryptoSubscription' : 'cryptoSubscription';
-
   const q = { $or: [{ wyiUserId: userId }, { linkedProviderIds: userId }] };
 
   await db.collection('users').updateOne(q, {
@@ -535,10 +491,7 @@ export async function handleNowPaymentsEvent(req: Request, res: Response) {
     return res.status(400).json({ success: false, message: 'Missing eventType' });
   }
 
-  // Resolve userId: provided in payload first, then fall back to DB lookup.
-  // The DB lookup handles IPN retries where the payload metadata might be missing.
   let userId = rawUserId;
-  // Try subscriptionId first (legacy subscriptions), then invoiceId (invoice-based)
   const idToCheck = invoiceId ?? subscriptionId;
   if (!userId && idToCheck) {
     const u = await findUserByNpSubscriptionId(idToCheck);
@@ -547,14 +500,11 @@ export async function handleNowPaymentsEvent(req: Request, res: Response) {
 
   if (!userId) {
     console.warn(`[NowPayments] Could not resolve userId for invoiceId=${invoiceId} subscriptionId=${subscriptionId}`);
-    // Return 200 so NP stops retrying — log as orphan for manual review.
     return res.status(200).json({ success: true, warning: 'User not found, logged as orphan.' });
   }
 
   try {
     if (productType === 'credits') {
-      // Credits are granted on ACTIVATED (early) or PAYMENT_COMPLETED (final confirm).
-      // The Redis idempotency key prevents double-granting.
       if (eventType === 'ACTIVATED' || eventType === 'PAYMENT_COMPLETED') {
         await handleCreditPurchase(userId, payload);
       }
@@ -566,7 +516,6 @@ export async function handleNowPaymentsEvent(req: Request, res: Response) {
       return res.status(200).json({ success: true });
     }
 
-    // Default: app Pro plan
     await handleAppPlanEvent(eventType, userId, payload);
     return res.status(200).json({ success: true });
 
@@ -578,20 +527,6 @@ export async function handleNowPaymentsEvent(req: Request, res: Response) {
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  PLAN CHANGE HANDLER   POST /nowpayments/change-plan
-//
-//  NOWPayments has NO "change subscription" PATCH API (unlike Paddle).
-//
-//  UPGRADE  (e.g. startup → growth):
-//    1. DELETE old NP subscription (stops future renewal invoices at old price)
-//    2. Write new plan to DB optimistically so features unlock immediately
-//    3. Return requiresNewCheckout: true → frontend opens new checkout
-//    4. IPN "ACTIVATED" on new payment confirms and writes new subscriptionId
-//
-//  DOWNGRADE  (e.g. growth → startup):
-//    1. DELETE old NP subscription (stops future renewal invoices)
-//    2. Write cancelAtPeriodEnd + scheduledDowngradeAt to DB
-//    3. User keeps full access until periodEnd
-//    4. requiresNewCheckout: false — user re-subscribes to cheaper plan later
 // ═════════════════════════════════════════════════════════════════════════════
 
 const PLAN_ORDER: ApiPlanName[] = ['free', 'developer', 'startup', 'growth', 'enterprise'];
@@ -619,7 +554,6 @@ export async function changeNowPaymentsPlanHandler(req: Request, res: Response):
     comment?:     string;
   };
 
-  // ── Validation ─────────────────────────────────────────────────────────────
   if (!rawUserId || !targetPlan) {
     return res.status(400).json({ success: false, message: 'userId and targetPlan are required.' });
   }
@@ -633,7 +567,6 @@ export async function changeNowPaymentsPlanHandler(req: Request, res: Response):
     });
   }
 
-  // ── Load user ───────────────────────────────────────────────────────────────
   const user = await db.collection('users').findOne({
     $or: [{ wyiUserId: rawUserId }, { linkedProviderIds: rawUserId }],
   });
@@ -641,7 +574,6 @@ export async function changeNowPaymentsPlanHandler(req: Request, res: Response):
     return res.status(404).json({ success: false, message: 'User not found.' });
   }
 
-  // Resolve which sub field and current plan to use
   const subField    = productType === 'api' ? 'apiCryptoSubscription' : 'cryptoSubscription';
   const currentPlan = productType === 'api'
     ? (user.apiPlan as string ?? 'free')
@@ -649,7 +581,6 @@ export async function changeNowPaymentsPlanHandler(req: Request, res: Response):
 
   const sub = user[subField] as (CryptoSubDoc & Record<string, any>) | undefined;
 
-  // ── Guards ──────────────────────────────────────────────────────────────────
   if (!sub?.subscriptionId || sub.provider !== 'nowpayments') {
     return res.status(400).json({
       success: false,
@@ -669,7 +600,6 @@ export async function changeNowPaymentsPlanHandler(req: Request, res: Response):
     return res.status(400).json({ success: false, message: 'You are already on this plan.' });
   }
 
-  // ── Cancel existing NP subscription ────────────────────────────────────────
   const cancelled = await cancelNpSubscription(sub.subscriptionId);
   if (!cancelled) {
     return res.status(502).json({
@@ -683,14 +613,9 @@ export async function changeNowPaymentsPlanHandler(req: Request, res: Response):
 
   const q = { $or: [{ wyiUserId: rawUserId }, { linkedProviderIds: rawUserId }] };
 
-  // ── UPGRADE ─────────────────────────────────────────────────────────────────
   if (changeType === 'upgrade') {
-    // Write new plan optimistically — features unlock before the new payment
-    // is confirmed (same as Paddle upgrade in api-plan-change-handler.ts).
-    // IPN ACTIVATED will overwrite subscriptionId once user pays.
     await db.collection('users').updateOne(q, {
       $set: {
-        // For API: write the target plan name. For app: always 'pro'.
         ...(productType === 'api'
           ? { apiPlan: targetPlan }
           : { plan:   'pro'      }
@@ -700,18 +625,16 @@ export async function changeNowPaymentsPlanHandler(req: Request, res: Response):
         [`${subField}.lastUpdated`]:       new Date(),
       },
       $unset: {
-        // Clear any prior downgrade scheduling
-        apiScheduledDowngradeAt:           '',
-        apiScheduledDowngradePlan:         '',
-        scheduledDowngradeAt:              '',
-        [`${subField}.canceledAt`]:        '',
-        [`${subField}.periodEnd`]:         '',
+        apiScheduledDowngradeAt:   '',
+        apiScheduledDowngradePlan: '',
+        scheduledDowngradeAt:      '',
+        [`${subField}.canceledAt`]: '',
+        [`${subField}.periodEnd`]:  '',
       },
     });
 
     await syncUserFeatures(db, redis, rawUserId);
 
-    // Log reason for analytics (fire-and-forget)
     if (reason) {
       db.collection('plan_change_reasons').insertOne({
         userId: user.wyiUserId, fromPlan: currentPlan, toPlan: targetPlan,
@@ -730,9 +653,7 @@ export async function changeNowPaymentsPlanHandler(req: Request, res: Response):
     });
   }
 
-  // ── DOWNGRADE ───────────────────────────────────────────────────────────────
-  // Keep access until the period end that was stored when the sub last renewed.
-  // Fallback chain: periodEnd → nextBilledAt → canceledAt → now + 30 days.
+  // DOWNGRADE
   const periodEnd =
     sub.periodEnd
     ?? sub.nextBilledAt
@@ -758,7 +679,6 @@ export async function changeNowPaymentsPlanHandler(req: Request, res: Response):
 
   await syncUserFeatures(db, redis, rawUserId);
 
-  // Log reason (fire-and-forget)
   if (reason) {
     db.collection('plan_change_reasons').insertOne({
       userId: user.wyiUserId, fromPlan: currentPlan, toPlan: targetPlan,
