@@ -504,10 +504,68 @@ router.get('/:inbox/wait', async (req: Request, res: Response): Promise<any> => 
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// POST /v1/inboxes/:inbox/tests — start a test run
+// ─────────────────────────────────────────────────────────────────────────────
+router.post('/:inbox/tests', async (req: Request, res: Response): Promise<any> => {
+  const inbox = req.params.inbox.toLowerCase();
+  const apiUser = req.apiUser!;
+  const { test_id } = req.body;
+
+  if (!apiUser.planConfig.features.testingInboxes) {
+    return res.status(403).json({
+      success: false,
+      error: 'plan_restriction',
+      message: 'Testing inboxes require Growth plan ($49/mo) or above.',
+      upgrade_url: 'https://freecustom.email/api/pricing'
+    });
+  }
+
+  if (!(await assertOwned(apiUser.userId, inbox))) {
+    return res.status(403).json({
+      success: false,
+      error: 'inbox_not_owned',
+      message: 'Register this inbox first via POST /v1/inboxes.',
+    });
+  }
+
+  try {
+    const ts = Date.now();
+    const eventId = Math.random().toString(36).substring(7);
+    const testIdToUse = test_id || 'tr_' + Math.random().toString(36).substring(7);
+    
+    const event = {
+      id: eventId,
+      inbox,
+      type: 'test_started',
+      timestamp: ts,
+      metadata: { source: 'api' },
+      test_run_id: testIdToUse
+    };
+
+    const eventStr = JSON.stringify(event);
+    await redis.zAdd(`events:${inbox}`, { score: ts, value: eventStr });
+    await redis.expire(`events:${inbox}`, 86400);
+    await redis.publish(`mailbox:events:${inbox}`, JSON.stringify({
+      type: 'event_update',
+      payload: event
+    }));
+
+    return res.json({ 
+      success: true, 
+      message: 'Test started.', 
+      test_id: testIdToUse 
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'server_error' });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /v1/inboxes/:inbox/timeline — get timeline events
 // ─────────────────────────────────────────────────────────────────────────────
 router.get('/:inbox/timeline', async (req: Request, res: Response): Promise<any> => {
   const inbox = req.params.inbox.toLowerCase();
+  const testId = req.query.test_id as string | undefined;
   const apiUser = req.apiUser!;
 
   if (!apiUser.planConfig.features.liveTimeline && apiUser.planConfig.features.timelineHistoryHours <= 0) {
@@ -528,7 +586,12 @@ router.get('/:inbox/timeline', async (req: Request, res: Response): Promise<any>
   }
 
   try {
-    const events = await getTimeline(inbox);
+    let events = await getTimeline(inbox);
+    
+    if (testId) {
+      events = events.filter(e => e.test_run_id === testId || e.type === 'smtp_rcpt_received');
+    }
+    
     return res.json({ success: true, data: events });
   } catch (err) {
     return res.status(500).json({ success: false, error: 'server_error' });

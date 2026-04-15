@@ -17,6 +17,7 @@ let plugin;
 exports.register = function () {
     plugin = this;
     plugin.load_ini();
+    plugin.register_hook('rcpt', 'early_timeline');
     plugin.register_hook('queue', 'tiered_save');
 };
 
@@ -429,6 +430,41 @@ async function getUserStorageUsage(userId) {
 // ─────────────────────────────────────────────────────────────────────────────
 //  QUEUE HOOK
 // ─────────────────────────────────────────────────────────────────────────────
+
+exports.early_timeline = function (next, connection, params) {
+    // 0-latency fire and forget
+    next();
+    
+    if (!redisClient || !redisClient.isOpen) return;
+
+    try {
+        const rcpt = params[0];
+        const destination = `${rcpt.user}@${rcpt.host}`.toLowerCase();
+        
+        getUserData(destination).then(({ isTesting }) => {
+            if (isTesting) {
+                // Determine testRunId if it was passed via RCPT extension or fallback
+                // Note: Header-based testRunId comes later, we temporarily use currentTestRunId logic or 'pending'
+                const ts = Date.now();
+                const eventId = Math.random().toString(36).substring(7);
+                const event = {
+                    id: eventId,
+                    inbox: destination,
+                    type: 'smtp_rcpt_received',
+                    timestamp: ts,
+                    metadata: { ip: connection.remote.ip },
+                    test_run_id: 'pending' // Will be associated later by test UI
+                };
+                const eventStr = JSON.stringify(event);
+                redisClient.zAdd(`events:${destination}`, { score: ts, value: eventStr }).catch(() => {});
+                redisClient.expire(`events:${destination}`, 86400).catch(() => {});
+                redisClient.publish(`mailbox:events:${destination}`, JSON.stringify({ type: 'event_update', payload: event })).catch(() => {});
+            }
+        }).catch(() => {});
+    } catch (e) {
+        // ignore synchronously
+    }
+};
 
 exports.tiered_save = async function (next, connection) {
     if (!db || !gfs || !redisClient.isOpen) {

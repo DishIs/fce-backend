@@ -61,7 +61,13 @@ List all inboxes registered under your account.
 
 ### `POST /v1/inboxes`
 Register a new temporary inbox.
-*   **Body**: `{ "inbox": "address@domain.com" }`
+*   **Body**: 
+    ```json
+    { 
+      "inbox": "address@domain.com",
+      "isTesting": true // (Optional) Flags inbox for diagnostic Timeline and Insight events (Growth/Enterprise only)
+    }
+    ```
 *   **Response (201 Created)**:
     ```json
     { "success": true, "message": "Inbox registered." }
@@ -97,7 +103,65 @@ Permanently delete a specific message.
 ## 6. Premium Features
 
 ### `GET /v1/inboxes/:address/otp`
-Automatically extract the latest 4-6 digit code from the most recent message.
+Automatically extract the latest verification code and magic link from the most recent message. Includes probability scoring.
+
+*   **Response (200 OK)**:
+    ```json
+    {
+      "success": true,
+      "otp": "847291",
+      "score": 0.8,
+      "email_id": "msg_abc123",
+      "timestamp": 1713184200000,
+      "verification_link": "https://auth.example.com/magic?token=xyz"
+    }
+    ```
+
+### `POST /v1/inboxes/:address/tests`
+Start a new test timeline. Associates future events with a specific test run. (Growth/Enterprise only).
+*   **Body**: 
+    ```json
+    { "test_id": "tr_test_123" } // (Optional) Custom test identifier
+    ```
+*   **Response (200 OK)**:
+    ```json
+    { "success": true, "message": "Test started.", "test_id": "tr_test_123" }
+    ```
+
+### `GET /v1/inboxes/:address/timeline`
+Fetch zero-latency delivery and processing events for diagnostic purposes. (Growth/Enterprise only).
+*   **Query Parameters**: `?test_id=tr_test_123` (Optional)
+*   **Response (200 OK)**:
+    ```json
+    {
+      "success": true,
+      "data": [
+        {
+          "id": "evt_1",
+          "inbox": "test@domain.com",
+          "type": "smtp_rcpt_received",
+          "timestamp": 1713184200000,
+          "latency_ms": 0,
+          "test_run_id": "tr_test_123"
+        }
+      ]
+    }
+    ```
+
+### `GET /v1/inboxes/:address/insights`
+Fetch automated diagnostic issues regarding delivery and OTP parsing logic. (Growth/Enterprise only).
+*   **Response (200 OK)**:
+    ```json
+    {
+      "success": true,
+      "data": [
+        {
+          "type": "slow_delivery",
+          "message": "Delivery and processing took over 3s"
+        }
+      ]
+    }
+    ```
 *   **Plan Requirement**: **Growth** or above.
 
 ### `GET /v1/inboxes/:address/wait`
