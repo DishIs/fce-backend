@@ -90,17 +90,27 @@ async function runSweep(
             if (ttl === -2) continue; // evaporated between scan and TTL check
 
             // Case 1: Key has NO expiry (bug) OR has TOO MUCH time remaining (created with wrong default)
-            // We do NOT delete these; we simply clamp the TTL to the policy limit.
+            // For anon/free users: DELETE emails that exceed retention
+            // For other cases: clamp TTL to policy max
             if (ttl === -1 || ttl > maxTtl) {
                 const reason = ttl === -1 ? 'no TTL' : `TTL ${ttl}s > max ${maxTtl}s`;
                 
-                console.log(`[clamp]   ${key}  (${reason} -> set to ${maxTtl}s)`);
-                
-                if (!dryRun) {
-                    // Update the expiry to the policy max without deleting data
-                    await redis.expire(key, maxTtl);
+                // For anonymous/free, actually delete if past retention
+                if ((plan === 'anon' || plan === 'anonymous' || plan === 'free') && ttl > 0 && ttl > maxTtl) {
+                    console.log(`[delete]  ${key}  (expired after ${maxTtl}s)`);
+                    if (!dryRun) await redis.del(key);
+                    counts.deleted++;
+                } else if (ttl === -1) {
+                    // No TTL set - this is a bug, clamp it
+                    console.log(`[clamp]   ${key}  (${reason} -> set to ${maxTtl}s)`);
+                    if (!dryRun) await redis.expire(key, maxTtl);
+                    counts.fixed++;
+                } else {
+                    // TTL too high but not expired yet - clamp
+                    console.log(`[clamp]   ${key}  (${reason} -> set to ${maxTtl}s)`);
+                    if (!dryRun) await redis.expire(key, maxTtl);
+                    counts.fixed++;
                 }
-                counts.fixed++;
             } 
             else {
                 // TTL is within valid range
@@ -116,6 +126,7 @@ async function runSweep(
     // ── Summary ───────────────────────────────────────────────────────────────
     console.log('\n' + '-'.repeat(60));
     console.log(`Scanned:          ${seen.size.toLocaleString()} keys`);
+    console.log(`Deleted (expired):${counts.deleted.toLocaleString()}`);
     console.log(`Deleted (orphan): ${counts.orphan.toLocaleString()}`);
     console.log(`Fixed (TTL clamp):${counts.fixed.toLocaleString()}`);
     console.log(`Skipped (ok/pro): ${counts.skipped.toLocaleString()}`);
