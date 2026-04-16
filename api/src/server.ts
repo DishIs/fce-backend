@@ -58,7 +58,11 @@ import { attachIdentityContext, progressiveFrictionEngine } from './middlewares/
 import { verifySignature } from './utils/crypto';
 import { autoChargeApiPlanHandler, autoChargeCreditsHandler } from './handlers/auto-billing-handler';
 import { getUserWebhooksHandler, getUserWebhookLogsHandler, addWebhookHandler, deleteWebhookHandler, regenerateWebhookSecretHandler, getWebhookByIdHandler } from './handlers/internal-webhooks';
-import { handleNowPaymentsEvent, changeNowPaymentsPlanHandler, linkPendingSubscription } from './handlers/nowpayments-handler';
+import { changeNowPaymentsPlanHandler, handleNowPaymentsEvent, linkPendingSubscription } from './handlers/nowpayments-handler';
+import { ProEvents } from './internal/pro/events';
+import { ProOTP } from './internal/pro/otp';
+import { ProInsights } from './internal/pro/insights';
+import { ProTimeline } from './internal/pro/timeline';
 
 declare global {
   namespace Express {
@@ -349,6 +353,11 @@ connectToMongo().then(() => {
   }
 
   (async () => {
+    // Initialize Platform Layer modules
+    ProEvents.init();
+    ProInsights.generate();
+    ProTimeline.groupTestRuns();
+
     await subscriber.pSubscribe('mailbox:events:*', (message, channel) => {
       try {
         const event = JSON.parse(message);
