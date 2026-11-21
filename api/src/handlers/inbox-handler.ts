@@ -17,7 +17,7 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
   if (!/^[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}$/.test(normalizedInbox)) {
     return res.status(400).json({
       success: false,
-      message: "Please enter a valid email address (e.g. myinbox@ditube.info).",
+      message: "Please enter a valid email address (e.g. myinbox@haloforge.online).",
     });
   }
 
@@ -46,7 +46,7 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
       if (registryEntry.tier === 'pro' && !isPro) {
         return res.status(403).json({
           success: false,
-          message: `@${domain} is a Pro-tier domain. Upgrade to Pro to use it, or choose a free domain (e.g. @ditube.info).`,
+          message: `@${domain} is a Pro-tier domain. Upgrade to Pro to use it, or choose a free domain (e.g. @haloforge.online).`,
           upgrade_url: 'https://freecustom.email/pricing',
         });
       }
@@ -56,7 +56,7 @@ export async function addInboxHandler(req: Request, res: Response): Promise<any>
       if (!isPro) {
         return res.status(403).json({
           success: false,
-          message: `Domain "${domain}" is not supported. Use an address at one of our provided domains (e.g. @ditube.info). Custom domains require a Pro plan.`,
+          message: `Domain "${domain}" is not supported. Use an address at one of our provided domains (e.g. @haloforge.online). Custom domains require a Pro plan.`,
           upgrade_url: 'https://freecustom.email/pricing',
         });
       }

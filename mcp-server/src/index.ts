@@ -127,7 +127,7 @@ function createFceMcpServer(apiKey: string): McpServer {
       title: "Get Latest Email",
       description: "Retrieves the most recent email for a given inbox address.",
       inputSchema: {
-        inbox: z.string().describe("Full email address of the inbox (e.g. hello@ditube.info)"),
+        inbox: z.string().describe("Full email address of the inbox (e.g. hello@haloforge.online)"),
       },
     },
     async ({ inbox }) => {
@@ -167,7 +167,7 @@ function createFceMcpServer(apiKey: string): McpServer {
         "Generates a random inbox on premium domains and holds the connection open until " +
         "an OTP arrives — completes a full signup flow in a single tool call.",
       inputSchema: {
-        domain: z.string().optional().describe("Domain to use (defaults to ditube.info)"),
+        domain: z.string().optional().describe("Domain to use (defaults to haloforge.online)"),
         timeout: z
           .number()
           .min(10)
@@ -179,7 +179,7 @@ function createFceMcpServer(apiKey: string): McpServer {
     async ({ domain, timeout }) => {
       try {
         const r = await mcpClient.post("/create-and-wait-otp", {
-          domain: domain ?? "ditube.info",
+          domain: domain ?? "haloforge.online",
           timeout: timeout ?? 45,
         });
         return { content: [{ type: "text" as const, text: JSON.stringify(r.data, null, 2) }] };
@@ -289,7 +289,7 @@ function createFceMcpServer(apiKey: string): McpServer {
       title: "Create Inbox",
       description: "Registers a new inbox email address on the account.",
       inputSchema: {
-        inbox: z.string().describe("Full email address to register (e.g. mybox@ditube.info)"),
+        inbox: z.string().describe("Full email address to register (e.g. mybox@haloforge.online)"),
       },
     },
     async ({ inbox }) => {

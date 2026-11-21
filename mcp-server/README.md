@@ -128,12 +128,12 @@ Once connected, your AI agent will have access to the following tools:
 
 #### `create_and_wait_for_otp` (🔥 GOLD FEATURE)
 Generates a random inbox and holds the connection open until an OTP arrives.
-- **`domain`** (optional): Domain to use (defaults to `ditube.info`)
+- **`domain`** (optional): Domain to use (defaults to `haloforge.online`)
 - **`timeout`** (optional): Max wait time in seconds (10-60, defaults to 45)
 
 #### `get_latest_email`
 Retrieves the most recent email for a given inbox.
-- **`inbox`** (required): Full email address (e.g. `hello@ditube.info`)
+- **`inbox`** (required): Full email address (e.g. `hello@haloforge.online`)
 
 #### `extract_otp`
 Directly retrieves the latest 4-6 digit code or verification link.

@@ -167,7 +167,7 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
     return res.status(400).json({
       success: false,
       error:   'invalid_inbox',
-      message: 'Must be a valid email address, e.g. "mybox@ditube.info".',
+      message: 'Must be a valid email address, e.g. "mybox@haloforge.online".',
     });
   }
 
@@ -182,7 +182,7 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
       return res.status(403).json({
         success:     false,
         error:       'plan_restriction',
-        message:     `@${domain} is a Pro-tier domain and requires Growth plan or above. Use a free domain (e.g. @ditube.info) or upgrade.`,
+        message:     `@${domain} is a Pro-tier domain and requires Growth plan or above. Use a free domain (e.g. @haloforge.online) or upgrade.`,
         upgrade_url: 'https://freecustom.email/api/pricing',
       });
     }
@@ -192,8 +192,8 @@ router.post('/', async (req: Request, res: Response): Promise<any> => {
       return res.status(403).json({
         success:                  false,
         error:                    'domain_not_allowed',
-        message:                  `Domain "${domain}" is not supported. Use an inbox at one of our provided domains (e.g. something@ditube.info). Custom domains require Growth plan or above.`,
-        provided_domains_example: 'ditube.info',
+        message:                  `Domain "${domain}" is not supported. Use an inbox at one of our provided domains (e.g. something@haloforge.online). Custom domains require Growth plan or above.`,
+        provided_domains_example: 'haloforge.online',
         upgrade_url:              'https://freecustom.email/api/pricing',
       });
     }

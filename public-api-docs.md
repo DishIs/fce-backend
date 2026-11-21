@@ -53,7 +53,7 @@ List all inboxes registered under your account.
     {
       "success": true,
       "data": [
-        { "inbox": "mybox@ditube.info", "local": "mybox", "domain": "ditube.info" }
+        { "inbox": "mybox@haloforge.online", "local": "mybox", "domain": "haloforge.online" }
       ],
       "count": 1
     }
@@ -229,14 +229,14 @@ Returns an array of events:
   "data": [
     {
       "id": "abc1234",
-      "inbox": "test@ditmail.info",
+      "inbox": "test@lumenbay.info",
       "type": "email_received",
       "timestamp": 1713175400000,
       "latency_ms": 0
     },
     {
       "id": "def5678",
-      "inbox": "test@ditmail.info",
+      "inbox": "test@lumenbay.info",
       "type": "otp_extracted",
       "timestamp": 1713175400820,
       "latency_ms": 820,

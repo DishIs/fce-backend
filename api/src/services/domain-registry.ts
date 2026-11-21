@@ -43,25 +43,25 @@ export interface DomainEntry {
 // ─────────────────────────────────────────────────────────────────────────────
 export const DOMAIN_REGISTRY: DomainEntry[] = [
   // ── Free tier ───────────────────────────────────────────────────────────
-  { domain: 'ditapi.info',    tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
-  { domain: 'ditcloud.info',  tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
-  { domain: 'ditdrive.info',  tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
-  { domain: 'ditgame.info',   tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
-  { domain: 'ditlearn.info',  tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
-  { domain: 'ditpay.info',    tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
-  { domain: 'ditplay.info',   tier: 'free', expiresAt: '2026-07-10', tags: ['popular'], active: true  },
-  { domain: 'ditube.info',    tier: 'free', expiresAt: '2026-07-10', tags: ['popular'], active: true  },
-  { domain: 'junkstopper.info', tier: 'free', expiresAt: '2026-07-10', tags: [],        active: true  },
-  { domain: 'areueally.info', tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
+  { domain: 'lumenbay.info',    tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
+  { domain: 'echoharbor.in',  tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
+  { domain: 'sqlcompiler.info',  tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
+  { domain: 'lumenbay.info',   tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
+  { domain: 'haloforge.online',  tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
+  { domain: 'echoharbor.in',    tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
+  { domain: 'haloforge.info',   tier: 'free', expiresAt: '2026-07-10', tags: ['popular'], active: true  },
+  { domain: 'haloforge.online',    tier: 'free', expiresAt: '2026-07-10', tags: ['popular'], active: true  },
+  { domain: 'haloforge.info', tier: 'free', expiresAt: '2026-07-10', tags: [],        active: true  },
+  { domain: 'sqlcompiler.info', tier: 'free', expiresAt: '2026-07-10', tags: [],           active: true  },
 
   // ── Pro tier (add new stealthy domains here) ─────────────────────────────
   // Example — replace with real domains when you register them:
   // { domain: 'getnotify.io',   tier: 'pro',  expiresAt: '2027-03-01', tags: ['new'],    active: true  },
-  { domain: 'addmy.space', tier: 'free',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
-  { domain: 'attachmy.site', tier: 'free',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
-  { domain: 'ditmail.pro', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new', 'featured'],    active: true  },
-  { domain: 'isapi.live', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
-  { domain: 'mock-api.pro', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new', 'featured'],    active: true  },
+  { domain: 'lumenbay.info', tier: 'free',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
+  { domain: 'haloforge.online', tier: 'free',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
+  { domain: 'letstalkbout.biz', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new', 'featured'],    active: true  },
+  { domain: 'nimbusreach.in', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new'],    active: true  },
+  { domain: 'sqlcompiler.online', tier: 'pro',  expiresAt: '2026-09-05', tags: ['new', 'featured'],    active: true  },
   { domain: 'letstalkbout.biz', tier: 'pro',  expiresAt: '2027-04-05', tags: ['new', 'featured'],    active: true  },
   { domain: 'letstalkbout.info', tier: 'pro',  expiresAt: '2027-04-05', tags: ['new', 'featured'],    active: true  },
 ];

@@ -29,7 +29,7 @@ This API is designed for marketplaces. You can identify users via `x-marketplace
     {
       "id": "wNp8N0KoV",
       "from": "\"SendTestEmail\" <noreply@sendtestemail.com>",
-      "to": "maildrop@ditapi.info",
+      "to": "maildrop@lumenbay.info",
       "subject": "SendTestEmail.com - Testing Email ID: 00eb36052b8d426c86fa57a88f0b6753",
       "date": "2026-02-19T03:41:32.438Z",
       "hasAttachment": false,
@@ -62,7 +62,7 @@ This API is designed for marketplaces. You can identify users via `x-marketplace
   "data": {
     "id": "wNp8N0KoV",
     "from": "\"SendTestEmail\" <noreply@sendtestemail.com>",
-    "to": "maildrop@ditapi.info",
+    "to": "maildrop@lumenbay.info",
     "subject": "SendTestEmail.com - Testing Email ID: 00eb36052b8d426c86fa57a88f0b6753",
     "date": "2026-02-19T03:41:32.438Z",
     "hasAttachment": false,
@@ -119,7 +119,7 @@ This API is designed for marketplaces. You can identify users via `x-marketplace
   "success": true,
   "data": [
     {
-      "domain": "ditapi.info",
+      "domain": "lumenbay.info",
       "tier": "free",
       "tags": ["common"]
     }

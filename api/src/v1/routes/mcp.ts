@@ -187,7 +187,7 @@ router.get('/inboxes/:inbox/otp', async (req: Request, res: Response): Promise<a
 // ─────────────────────────────────────────────────────────────────────────────
 router.post('/create-and-wait-otp', async (req: Request, res: Response): Promise<any> => {
   const apiUser = req.apiUser!;
-  const domain = req.body.domain || 'ditube.info';
+  const domain = req.body.domain || 'haloforge.online';
   
   // Create random address
   const randomPrefix = Math.random().toString(36).substring(2, 10);
@@ -198,7 +198,7 @@ router.post('/create-and-wait-otp', async (req: Request, res: Response): Promise
   // Validate Domain (simplified checks for MCP premium layer)
   const registryEntry = getDomainEntry(domain);
   if (!registryEntry) {
-    return res.status(400).json({ success: false, error: 'invalid_domain', message: 'Use standard provided domain like ditube.info' });
+    return res.status(400).json({ success: false, error: 'invalid_domain', message: 'Use standard provided domain like haloforge.online' });
   }
 
   try {

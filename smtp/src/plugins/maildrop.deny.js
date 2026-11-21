@@ -15,16 +15,16 @@ exports.rcpt = function (next, connection, params) {
   const recipient_host = params["original_host"]; // Get the recipient address
   // Check if recipient_host is defined in me plugin
   const allowed_rcpt = [
-    "areueally.info",
-    "ditapi.info",
-    "ditcloud.info",
-    "ditdrive.info",
-    "ditgame.info",
-    "ditlearn.info",
-    "ditpay.info",
-    "ditplay.info",
-    "ditube.info",
-    "junkstopper.info",
+    "sqlcompiler.info",
+    "lumenbay.info",
+    "echoharbor.in",
+    "sqlcompiler.info",
+    "lumenbay.info",
+    "haloforge.online",
+    "echoharbor.in",
+    "haloforge.info",
+    "haloforge.online",
+    "haloforge.info",
     "whatsyour.info"
   ]
 

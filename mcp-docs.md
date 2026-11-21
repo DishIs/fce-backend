@@ -60,7 +60,7 @@ We provide three categories of MCP tools: **Email Operations**, **Custom Domains
 
 #### 1. `get_latest_email`
 Retrieves the most recent email for a given inbox address. 
-* **Args**: `inbox` (string) - The full email address of the inbox (e.g. `hello@ditube.info`)
+* **Args**: `inbox` (string) - The full email address of the inbox (e.g. `hello@haloforge.online`)
 
 #### 2. `extract_otp`
 Directly retrieves the latest 4-6 digit code or verification link.
@@ -69,7 +69,7 @@ Directly retrieves the latest 4-6 digit code or verification link.
 #### 3. `create_and_wait_for_otp` (🔥 GOLD FEATURE)
 Generates a random inbox on our premium domains and holds the connection open until an OTP arrives. This allows an AI agent to execute a complete signup flow in a single tool call!
 * **Args**: 
-  * `domain` (optional string) - Domain to use, defaults to `ditube.info`
+  * `domain` (optional string) - Domain to use, defaults to `haloforge.online`
   * `timeout` (optional number) - Max wait time in seconds (10-60), defaults to 45
 
 #### 4. `watch_email`
@@ -277,7 +277,7 @@ Content-Type: application/json
   "params": {
     "name": "create_and_wait_for_otp",
     "arguments": {
-      "domain": "ditube.info",
+      "domain": "haloforge.online",
       "timeout": 45
     }
   }
@@ -293,7 +293,7 @@ Content-Type: application/json
     "content": [
       {
         "type": "text",
-        "text": "{\"address\":\"random-inbox123@ditube.info\",\"domain\":\"ditube.info\",\"expiresAt\":\"2026-04-05T00:45:00.000Z\"}"
+        "text": "{\"address\":\"random-inbox123@haloforge.online\",\"domain\":\"haloforge.online\",\"expiresAt\":\"2026-04-05T00:45:00.000Z\"}"
       }
     ]
   }
@@ -414,7 +414,7 @@ The MCP server follows JSON-RPC 2.0 specification:
           "properties": {
             "inbox": {
               "type": "string",
-              "description": "The full email address of the inbox (e.g. hello@ditube.info)"
+              "description": "The full email address of the inbox (e.g. hello@haloforge.online)"
             }
           },
           "required": ["inbox"]
@@ -442,7 +442,7 @@ The MCP server follows JSON-RPC 2.0 specification:
           "properties": {
             "domain": {
               "type": "string",
-              "description": "Optional domain to use. Defaults to ditube.info"
+              "description": "Optional domain to use. Defaults to haloforge.online"
             },
             "timeout": {
               "type": "number",
